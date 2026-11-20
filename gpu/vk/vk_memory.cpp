@@ -2088,9 +2088,18 @@ namespace {   // (declared with CapBuf, in this file's anonymous namespace)
 // GPU's), from kLateLearn such waits a page on. With them, RX_VK_LATE_HELPER=1 leaves the wait out for a capture none of whose
 // late pages the write-back changes (its copy is right as taken). See late_helper_mode for what was measured: not kept
 std::mutex late_mask_mu;
-struct LateMask { uint32_t seen = 0; uint64_t blocks = 0; };
+struct LateMask { uint32_t seen = 0; uint64_t blocks = 0; uint32_t skips = 0; };
 std::unordered_map<uint32_t, LateMask> late_masks;   // (by page)
 constexpr uint32_t kLateLearn = 6;
+// (relink fix) A page learned "unchanged by its write-back" was skipped for the rest of the session, and a skipped page is
+// never waited for again, so nothing could unlearn it: once the game put other GPU-written data there (streamed textures,
+// a reused heap) the captures copied it before its write-back landed (wrong or striped ground after 15-30 min, flicker with
+// fast sync, gone after a restart or with RX_VK_FAST_SYNC=0). A learned page is now checked again every kLateRecheck
+// skips (RX_VK_LATE_RECHECK=<n>, 0: never, as before), and forgotten when the game frees its memory.
+uint32_t late_recheck() {
+    static const uint32_t n = getenv("RX_VK_LATE_RECHECK") ? (uint32_t)std::max(0, atoi(getenv("RX_VK_LATE_RECHECK"))) : 240;
+    return n;
+}
 std::atomic<int64_t> st_late_learned{0};
 // MEASURED 15/11 (expo_ab, the player's save): the game's thread waiting, 1.7 and 2.5 steps a thousand frames; mode 2 (whole
 // pages on the helper) 110.7; learned blocks on the helper 133.5; mode 1 as it is now (the wait left out only for captures
@@ -2118,7 +2127,25 @@ bool late_masks_known(const uint32_t* pages, const std::vector<uint32_t>& late, 
 bool late_mask_empty(uint32_t page) {
     std::lock_guard ml(late_mask_mu);
     auto it = late_masks.find(page);
-    return it != late_masks.end() && it->second.seen >= kLateLearn && it->second.blocks == 0;
+    if (it == late_masks.end() || it->second.seen < kLateLearn || it->second.blocks != 0) return false;
+    if (const uint32_t k = late_recheck(); k && ++it->second.skips >= k) {   // (waited for again, and learned again)
+        it->second = LateMask{};
+        return false;
+    }
+    return true;
+}
+/// (relink fix) the game freed [lo, hi): what was learned of its pages no longer holds for what comes there next
+void late_masks_forget(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return;
+    std::lock_guard ml(late_mask_mu);
+    if (late_masks.empty()) return;
+    const uint64_t p0 = lo >> kPageShift, p1 = (hi - 1) >> kPageShift;
+    if (p1 - p0 + 1 > late_masks.size()) {
+        for (auto it = late_masks.begin(); it != late_masks.end();)
+            it = (it->first >= p0 && it->first <= p1) ? late_masks.erase(it) : std::next(it);
+    } else {
+        for (uint64_t p = p0; p <= p1; p++) late_masks.erase((uint32_t)p);
+    }
 }
 /// (late_mask_mu) learns from one wait: the capture's copy of a page (before) against guest memory now (after)
 void late_mask_learn(uint32_t page, const uint8_t* before, const uint8_t* after) {
@@ -4107,6 +4134,7 @@ std::mutex released_mu;
 std::vector<std::pair<uint64_t, uint64_t>> released_queue;
 void memory_guest_release(uint64_t lo, uint64_t hi) {
     if (hi <= lo) return;
+    late_masks_forget(lo, hi);
     std::lock_guard lk(released_mu);
     if (!released_queue.empty() && released_queue.back().second == lo) released_queue.back().second = hi;   // (the next one up)
     else if (!released_queue.empty() && released_queue.back().first == hi) released_queue.back().first = lo;   // (or down)
