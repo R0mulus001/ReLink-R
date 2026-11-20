@@ -143,7 +143,7 @@ sealed class Settings
         if (l.Count == 0)
         {
             var old = ReadIni(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReLink", "launcher.ini"));
-            if (old.TryGetValue("game_folder", out var of) && Version(of) is { } ov && ov.StartsWith("v0.0.", StringComparison.Ordinal))
+            if (old.TryGetValue("game_folder", out var of) && Game.Version(of) is { } ov && ov.StartsWith("v0.0.", StringComparison.Ordinal))
                 l = old;
         }
         // (an earlier launcher kept the same three choices in lanceur.ini beside the game: taken once, while this one has none yet)
