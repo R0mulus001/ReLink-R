@@ -83,7 +83,7 @@ public partial class MainWindow
     {
         e.Handled = true;
         var version = s.Folder != "" ? Game.Version(s.Folder) : null;
-        Open(version != null ? $"https://github.com/pixl27/ProjectReLink/releases/tag/{version}" : "https://github.com/pixl27/ProjectReLink/releases");
+        Open(version != null ? $"https://github.com/R0mulus001/ReLink-R/releases/tag/{version}" : "https://github.com/R0mulus001/ReLink-R/releases");
     }
 
     void OpenModsFolder(object sender, RoutedEventArgs e)

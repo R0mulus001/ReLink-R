@@ -3,6 +3,12 @@
 Project ReLink is free software under the GNU General Public License, version 3 or later (GPL-3.0-or-later); the license
 text is in `LICENSE`.
 
+ReLink-R (https://github.com/R0mulus001/ReLink-R) is a modified version of Project ReLink
+(https://github.com/pixl27/ProjectReLink) by pixl27, released under the same GPL-3.0-or-later. Its changes, made from
+20 November 2026 on, are listed in its git history; everything below about Project ReLink's own origins still applies.
+
+    Project ReLink: Copyright (C) 2026 pixl27 and the Project ReLink contributors
+
 Project ReLink is a modified version of Longshot (https://git.magicbean.dev/MagicBeanDev/Longshot), which is itself a fork
 of Hookshot (https://github.com/NotRexed/Hookshot) by NotRexed; both are released under the GPL-3.0-or-later. ReLink's
 changes to their code were made in November 2026.
