@@ -1,11 +1,12 @@
 using System.Globalization;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
 
 namespace ReLink;
 
-/// The sky and the hills behind the window. They follow the player's clock, as the game's own day does: night, dawn, day and
+/// (ReLink-R: the violet night and the sword, below) The sky and the hills behind the window, upstream. They follow the player's clock, as the game's own day does: night, dawn, day and
 /// dusk, with the sun or the moon as high as the hour puts it. The top of the sky stays dark at every hour: the title is read
 /// there. (RELINK_HOUR=13.5 sets the hour, for tests)
 static class Scene
@@ -50,68 +51,104 @@ static class Scene
         return (Keys[0].Top, Keys[0].Low);
     }
 
+    /// (ReLink-R) The violet night behind the window at every hour: stars twinkling, a violet light, and the sword standing in its
+    /// stone pedestal, where the sun or the moon was. The hour still sets how much of the light there is, a little
     public static void Draw(Canvas canvas, double w, double h, double hour)
     {
         canvas.Children.Clear();
-        var (top, low) = Sky(hour);
+        var day = hour > 6.5 && hour < 18.5 ? 1.0 : 0.0;
         var sky = new LinearGradientBrush { StartPoint = new(0, 0), EndPoint = new(0, 1) };
-        sky.GradientStops.Add(new GradientStop(top, 0));
-        sky.GradientStops.Add(new GradientStop(top, 0.17));
-        sky.GradientStops.Add(new GradientStop(low, 0.36));
-        sky.GradientStops.Add(new GradientStop(low, 1));
+        sky.GradientStops.Add(new GradientStop(C("12102A"), 0));
+        sky.GradientStops.Add(new GradientStop(Mix(C("1E1A4A"), C("2A2366"), day * 0.4), 0.38));
+        sky.GradientStops.Add(new GradientStop(C("161335"), 1));
         canvas.Children.Add(new Rectangle { Width = w, Height = h, Fill = sky });
 
-        // how much of the night is in this hour: the stars' light
-        var sunUp = hour > 5.5 && hour < 19.5;
-        var night = hour < 5 || hour > 20.25 ? 1 : hour < 6.5 ? (6.5 - hour) / 1.5 : hour > 18.75 ? (hour - 18.75) / 1.5 : 0;
-        if (night > 0.02)
+        const double x = 790, slot = 232;   // (the sword's place: over the right of the picture, clear of the staff)
+        var halo = new RadialGradientBrush { GradientOrigin = new(0.5, 0.5), Center = new(0.5, 0.5), RadiusX = 0.5, RadiusY = 0.5 };
+        halo.GradientStops.Add(new GradientStop(Color.FromArgb(0x70, 0x5A, 0x48, 0xD8), 0));
+        halo.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0x5A, 0x48, 0xD8), 1));
+        var glow = new Ellipse { Width = 520, Height = 420, Fill = halo };
+        Canvas.SetLeft(glow, x - 260);
+        Canvas.SetTop(glow, slot - 260);
+        canvas.Children.Add(glow);
+
+        var rnd = new Random(1998);
+        for (var i = 0; i < 70; i++)
         {
-            var rnd = new Random(1998);
-            for (var i = 0; i < 54; i++)
+            var size = 1 + rnd.NextDouble() * 1.6;
+            var gold = rnd.NextDouble() < 0.22;
+            var star = new Ellipse { Width = size, Height = size, Fill = new SolidColorBrush(gold ? C("F6E3A6") : C("DCD6FF")), Opacity = 0.3 + rnd.NextDouble() * 0.6 };
+            Canvas.SetLeft(star, rnd.NextDouble() * w);
+            Canvas.SetTop(star, 6 + rnd.NextDouble() * 260);
+            canvas.Children.Add(star);
+            var twinkle = new System.Windows.Media.Animation.DoubleAnimation(star.Opacity, 0.12, TimeSpan.FromSeconds(1.4 + rnd.NextDouble() * 2.4))
             {
-                var size = 1 + rnd.NextDouble() * 1.4;
-                var star = new Ellipse { Width = size, Height = size, Fill = Brushes.White, Opacity = night * (0.3 + rnd.NextDouble() * 0.6) };
-                Canvas.SetLeft(star, rnd.NextDouble() * w);
-                Canvas.SetTop(star, 8 + rnd.NextDouble() * 200);
-                canvas.Children.Add(star);
-            }
+                AutoReverse = true, RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+                BeginTime = TimeSpan.FromSeconds(rnd.NextDouble() * 3),
+            };
+            star.BeginAnimation(UIElement.OpacityProperty, twinkle);
         }
 
-        // the sun by day, the moon by night, over the right of the left column: as high as the hour puts it
-        const double x = 790;   // (relink: over the right of the picture, clear of the staff)
-        if (sunUp)
+        // the light behind the blade
+        var light = new RadialGradientBrush();
+        light.GradientStops.Add(new GradientStop(Color.FromArgb(0x55, 0xF6, 0xE3, 0xA6), 0));
+        light.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0xF6, 0xE3, 0xA6), 1));
+        var lit = new Ellipse { Width = 200, Height = 200, Fill = light };
+        Canvas.SetLeft(lit, x - 100);
+        Canvas.SetTop(lit, slot - 150);
+        canvas.Children.Add(lit);
+
+        // the pedestal: a step with a gold edge, a stone block wider at its foot, its top with a gold rim and the slot
+        Hill(canvas, $"M{x - 104},{slot + 60} L{x + 104},{slot + 60} L{x + 104},{slot + 76} L{x - 104},{slot + 76} Z", C("2A2658"));
+        Hill(canvas, $"M{x - 104},{slot + 60} L{x + 104},{slot + 60} L{x + 104},{slot + 62.5} L{x - 104},{slot + 62.5} Z", C("E2BE5A"));
+        var stone = new LinearGradientBrush { StartPoint = new(0, 0), EndPoint = new(0, 1) };
+        stone.GradientStops.Add(new GradientStop(C("4A4592"), 0));
+        stone.GradientStops.Add(new GradientStop(C("26224F"), 1));
+        canvas.Children.Add(new Path { Data = Geometry.Parse($"M{x - 74},{slot} L{x + 74},{slot} L{x + 90},{slot + 60} L{x - 90},{slot + 60} Z"), Fill = stone });
+        Disc(canvas, x, slot + 30, 9, C("E2BE5A"), 1);
+        Disc(canvas, x, slot + 30, 7, C("3A3580"), 1);
+        Disc(canvas, x, slot + 30, 3.6, C("7A6AF0"), 1);
+        var top = new Ellipse { Width = 152, Height = 22, Fill = new SolidColorBrush(C("5A54AC")), Stroke = new SolidColorBrush(C("E2BE5A")), StrokeThickness = 2.5 };
+        Canvas.SetLeft(top, x - 76);
+        Canvas.SetTop(top, slot - 11);
+        canvas.Children.Add(top);
+        var hole = new Ellipse { Width = 26, Height = 7, Fill = new SolidColorBrush(C("100D26")) };
+        Canvas.SetLeft(hole, x - 13);
+        Canvas.SetTop(hole, slot - 3.5);
+        canvas.Children.Add(hole);
+
+        // the sword, blade down into the slot: nothing of it is drawn under the stone's top
+        var sword = new Canvas { Clip = new RectangleGeometry(new System.Windows.Rect(x - 40, 0, 80, slot)) };
+        var t = slot - 120;   // (the pommel's top: half the blade out)
+        void Part(string d, string hex) => sword.Children.Add(new Path { Data = Geometry.Parse(d), Fill = new SolidColorBrush(C(hex)) });
+        Part($"M{x - 6},{t + 44} L{x + 6},{t + 44} L{x + 6},{t + 154} L{x},{t + 168} L{x - 6},{t + 154} Z", "C9D3EE");
+        Part($"M{x},{t + 44} L{x + 6},{t + 44} L{x + 6},{t + 154} L{x},{t + 168} Z", "EEF2FF");
+        Part($"M{x - 0.6},{t + 48} L{x + 0.6},{t + 48} L{x + 0.6},{t + 146} L{x - 0.6},{t + 146} Z", "8C98C6");
+        Part($"M{x - 3.5},{t + 9} L{x + 3.5},{t + 9} L{x + 3.5},{t + 36} L{x - 3.5},{t + 36} Z", "6A5AE6");
+        foreach (var k in new[] { 15.0, 22, 29 }) Part($"M{x - 3.5},{t + k} L{x + 3.5},{t + k} L{x + 3.5},{t + k + 1.6} L{x - 3.5},{t + k + 1.6} Z", "4B3CC4");
+        void Dot(double cx, double cy, double r, string hex)
         {
-            var up = Math.Sin(Math.PI * (hour - 5.5) / 14);
-            var y = 206 - up * 136;
-            var colour = Mix(C("F2B56B"), C("FBF1CF"), up);
-            Disc(canvas, x, y, 46, colour, 0.10);
-            Disc(canvas, x, y, 21, colour, 1);
+            var e = new Ellipse { Width = 2 * r, Height = 2 * r, Fill = new SolidColorBrush(C(hex)) };
+            Canvas.SetLeft(e, cx - r);
+            Canvas.SetTop(e, cy - r);
+            sword.Children.Add(e);
         }
-        else
-        {
-            var since = hour >= 19.5 ? hour - 19.5 : hour + 4.5;
-            var up = Math.Sin(Math.PI * since / 10);
-            var y = 206 - up * 136;
-            Disc(canvas, x, y, 17, C("E9E6D8"), 1);
-            Disc(canvas, x + 7.5, y - 4, 15, top, 1);   // (the sky's own colour over it: a crescent)
-        }
+        Dot(x, t + 4.5, 5.5, "E2BE5A");
+        Dot(x, t + 4.5, 2.2, "6A5AE6");
+        Part($"M{x - 17},{t + 36.5} L{x + 17},{t + 36.5} L{x + 17},{t + 43.5} L{x - 17},{t + 43.5} Z", "E2BE5A");
+        Dot(x - 17.5, t + 40, 4, "E2BE5A");
+        Dot(x + 17.5, t + 40, 4, "E2BE5A");
+        Dot(x, t + 40, 5, "F6E3A6");
+        Dot(x, t + 40, 3.7, "4B3CC4");
+        canvas.Children.Add(sword);
 
-        // (relink) the land's marks, in the sky's own light: the mountain with its ring of smoke, behind the far ridge
-        Hill(canvas, "M498,232 L583,126 L597,135 L611,118 L706,232 Z", Mix(low, C("3C3550"), 0.72));
-        var ring = new Ellipse { Width = 54, Height = 13, Stroke = new SolidColorBrush(Mix(low, C("ECE6D8"), 0.75)), StrokeThickness = 3, Opacity = 0.6 };
-        Canvas.SetLeft(ring, 577);
-        Canvas.SetTop(ring, 98);
-        canvas.Children.Add(ring);
-
-        // three ridges, the far one taking the horizon's light; the castle on the middle one, a lone tree on the near one
-        Hill(canvas, "M0,226 C120,194 230,200 330,216 C430,232 520,208 640,200 C780,190 900,226 1120,204 L1120,700 L0,700 Z", Mix(low, C("1E3B30"), 0.58));
-        var castle = Mix(low, C("152B22"), 0.86);
-        Hill(canvas, "M716,232 L716,194 L722,194 L722,186 L728,186 L728,194 L734,194 L734,176 L740,164 L746,176 L746,194 L754,194 L754,202 L762,202 L762,186 L768,186 L768,232 Z", castle);
-        Hill(canvas, "M0,262 C90,246 190,234 300,250 C400,264 470,274 600,262 C760,246 900,272 1120,246 L1120,700 L0,700 Z", Mix(low, C("183226"), 0.82));
-        var near = Mix(top, C("11241B"), 0.92);
-        Hill(canvas, "M0,292 C140,274 260,284 380,298 C520,314 700,288 860,294 C980,298 1060,288 1120,284 L1120,700 L0,700 Z", near);
-        Disc(canvas, 612, 278, 17, near, 1);
-        Hill(canvas, "M609,284 L615,284 L615,304 L609,304 Z", near);
+        // the violet mist along the bottom
+        var mist = new LinearGradientBrush { StartPoint = new(0, 0), EndPoint = new(0, 1) };
+        mist.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0x7A, 0x6A, 0xF0), 0));
+        mist.GradientStops.Add(new GradientStop(Color.FromArgb(0x30, 0x7A, 0x6A, 0xF0), 1));
+        var floor = new Rectangle { Width = w, Height = Math.Max(0, h - slot - 40), Fill = mist };
+        Canvas.SetTop(floor, slot + 40);
+        canvas.Children.Add(floor);
     }
 
     static void Disc(Canvas canvas, double x, double y, double r, Color colour, double opacity)

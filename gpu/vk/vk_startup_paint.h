@@ -1,11 +1,10 @@
-// (relink) The start-up screen's picture (vk_menu.cpp draws it, vk_main.cpp says what is in it): the project's mark, a gold
-// note on a staff (assets/relink.png), being written while the shaders are prepared. On the mark's green, the staff runs across
-// the screen and fills with gold from the left as the start goes on; the note goes ahead of the gold, a step up or down at each
-// beat, and leaves a faint note on each line it was on. Under it the number and one line: what is being done and the time
-// left. When a long start is over the staff closes into the mark's frame, which draws itself around it, and the game starts.
-// The green is kept between frames; the staff, the notes and the text are drawn over a copy each frame. Pixels are written
-// straight into the 32-bit bitmap; the text is GDI in the game's own typeface (Rubik, assets/fonts: nx2/fonts_embed.py), or
-// the system's where it is not (on Linux host/posix/gdi_posix.c).
+// (relink, ReLink-R) The start-up screen's picture (vk_menu.cpp draws it, vk_main.cpp says what is in it): a sword drawn out of a
+// stone pedestal while the shaders are prepared. On a violet night with twinkling stars, the sword stands in the pedestal's slot
+// with only its hilt out; as the start goes on it rises out of the stone, and a gold light grows behind it and pools on the
+// stone. When a long start is over the sword finishes coming out and the light pulses, and the game starts. Under it the
+// number and one line: what is being done and the time left. The night is kept between frames; the stars, the pedestal, the
+// sword and the text are drawn over a copy each frame. Pixels are written straight into the 32-bit bitmap; the text is GDI in
+// the game's own typeface (Rubik, assets/fonts: nx2/fonts_embed.py), or the system's where it is not (host/posix/gdi_posix.c).
 #pragma once
 
 #include <algorithm>
@@ -201,6 +200,25 @@ inline void box(uint32_t* px, int w, int h, float x, float y, float bw, float bh
         }
     }
 }
+/// A trapezoid from y0 to y1, its left and right edges going from (l0, r0) at y0 to (l1, r1) at y1, its colour from top to
+/// bottom colour(t); soft left and right edges (ReLink-R: the pedestal and the blade)
+template <class Colour>
+inline void trap(uint32_t* px, int w, int h, float y0, float y1, float l0, float r0, float l1, float r1, Colour colour, float a) {
+    if (a <= 0 || y1 <= y0) return;
+    const int ya = std::max(0, (int)y0), yb = std::min(h - 1, (int)y1);
+    for (int py = ya; py <= yb; py++) {
+        const float cy = (float)py + 0.5f, t = clamp01((cy - y0) / (y1 - y0));
+        const float vy = clamp01(std::min((float)py + 1 - y0, y1 - (float)py));
+        const float l = l0 + (l1 - l0) * t, r = r0 + (r1 - r0) * t;
+        if (r <= l) continue;
+        const Rgb c = colour(t);
+        const int xa = std::max(0, (int)l - 1), xb = std::min(w - 1, (int)r + 1);
+        for (int pxx = xa; pxx <= xb; pxx++) {
+            const float cover = vy * clamp01(std::min((float)pxx + 1 - l, r - (float)pxx));
+            if (cover > 0) blend(px[(size_t)py * w + pxx], c, a * cover);
+        }
+    }
+}
 /// The outline of a square with round corners, side s, corner radius r, stroke t thick, drawn along its length up to share
 /// (0 to 1) from the top left corner's end, clockwise: dots of the stroke's width every half pixel
 inline void frame(uint32_t* px, int w, int h, float x, float y, float s, float r, float t, float share, Rgb c) {
@@ -242,7 +260,7 @@ inline void frame(uint32_t* px, int w, int h, float x, float y, float s, float r
     }
 }
 
-/// What stays between frames: the green ground of one size, its light a little stronger behind the staff
+/// What stays between frames: the violet night of one size, its light a little stronger behind the sword
 struct Backdrop {
     int w = 0, h = 0, dawn_q = -1;
     std::vector<uint32_t> px;
@@ -250,8 +268,8 @@ struct Backdrop {
 inline void paint_backdrop(Backdrop& bd, int w, int h) {
     bd.w = w, bd.h = h;
     bd.px.assign((size_t)w * h, 0);
-    const Rgb inner = hex(0x1B3528), mid = hex(0x142A1F), outer = hex(0x0E1F17);
-    const float cx = 0.5f * (float)w, cy = 0.42f * (float)h;
+    const Rgb inner = hex(0x3B2E92), mid = hex(0x1E1A4A), outer = hex(0x0B0A1C);
+    const float cx = 0.5f * (float)w, cy = 0.36f * (float)h;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
             const float dx = ((float)x - cx) / (0.5f * (float)w), dy = ((float)y - cy) / (0.58f * (float)h);
@@ -284,9 +302,7 @@ inline bool startup_fonts() {
 /// The ground kept between frames (the painter's thread alone draws; vk_menu.cpp lets it go when the game starts)
 inline startup_art::Backdrop startup_backdrop;
 
-/// The screen into dc, the whole w x h window: the project's mark being written. Its staff runs across the screen and fills
-/// with gold as the start goes on; its note goes ahead of the gold, a step up or down at each beat, and leaves a faint note
-/// on each line it was on. When a long start is over the staff closes into the mark's frame, which draws itself around it.
+/// The screen into dc, the whole w x h window: a sword drawn out of a stone pedestal as the start goes on (ReLink-R).
 /// bits: the bitmap's pixels (32-bit, top-down, w wide); null (a test without them): the text alone. pct is not used
 inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const StartupView& v, uint32_t* bits = nullptr) {
     using namespace startup_gdi;
@@ -298,80 +314,79 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
     const auto X = [&](float x) { return ox + x * m; };
     const auto Y = [&](float y) { return oy + y * m; };
     const float t = (float)v.anim;
-    static const int melody[] = {2, 1, 3, 2, 0, 1, 3, 4, 2, 3, 1, 0, 2, 4, 3, 1, 2, 0, 1, 3, 2};   // (the line of each beat, 0 the top)
-    const int beats = (int)(sizeof melody / sizeof melody[0]);
-    // how far the staff has closed into the mark: the mark alone in the first second (a short start ends there), the staff
-    // opening out as a long one shows its numbers, and closing again when it is over
-    float closed = v.label.empty() ? 1.0f : 1.0f - smooth(1.0f, 1.6f, t);
     float pulse = 0;
-    // (the ending, kStartupOutro: the gold finishes the staff, then it closes into the mark, then the mark pulses)
+    // (the ending, kStartupOutro: the sword finishes coming out, then its light pulses)
     const float o = (float)v.outro, finish = v.outro >= 0 ? smooth(0, 0.7f, o) : -1;
-    // (a staff still opening when the work ended goes on opening: no jump)
-    if (v.outro >= 0) closed = std::max(closed, smooth(0.7f, 1.7f, o)), pulse = std::sin(3.14159f * clamp01((o - 1.7f) / 0.4f));
-    else if (v.label == "STARTING") closed = 1;   // (a short start's end: the mark stays on screen while the game loads)
-    // (the gold slides to the number rather than jumping to it: the painter's thread alone draws, so the last frame's is kept)
+    if (v.outro >= 0) pulse = std::sin(3.14159f * clamp01((o - 0.9f) / 0.6f));
+    // (the sword slides to the number rather than jumping to it: the painter's thread alone draws, so the last frame's is kept)
     static float shown = -1, shown_at = 0;
     const float target = v.fraction >= 0 ? clamp01((float)v.fraction) : 0;
     if (shown < 0 || target < shown - 0.2f || t < shown_at) shown = target;
     else shown += (target - shown) * clamp01((t - shown_at) * 2.5f);
     shown_at = t;
-    static float finish_from = -1;   // (where the gold was when the work ended: the ending fills the rest)
+    static float finish_from = -1;   // (where the sword was when the work ended: the ending draws it the rest of the way)
     if (finish < 0) finish_from = -1;
     else if (finish_from < 0) finish_from = shown;
-    const float p = finish < 0 ? shown : finish_from + (1 - finish_from) * finish;
-    // (while it works the screen stays alive whatever the number does: the note floats, its light breathes, a gleam runs along
-    // the gold and small notes rise from it. None of it says the work went further than it did)
+    float p = finish < 0 ? shown : finish_from + (1 - finish_from) * finish;
+    if (v.label.empty() || v.label == "STARTING") p = 1;   // (a short start, or its end: the sword out, the game loading)
     const bool alive = !v.label.empty() && v.outro < 0 && v.label != "STARTING" && v.label != "CLOSING";
-    const Rgb gold = hex(0xC9A24B), pale = hex(0xF4DE9C), line_c = hex(0x2F4A3C);
+    const Rgb gold = hex(0xE2BE5A), pale = hex(0xF6E3A6), violet = hex(0x7A6AF0);
     if (bits) {
         Backdrop& bd = startup_backdrop;
         if (bd.w != W || bd.h != H) paint_backdrop(bd, W, H);
         std::memcpy(bits, bd.px.data(), (size_t)W * H * 4);
-        // the staff: across the screen, or folded into the frame
-        const float lx0 = X(90 + (286 - 90) * closed), lx1 = X(590 + (394 - 590) * closed), r = 1.5f * m;
-        float ly[5];
-        for (int i = 0; i < 5; i++) ly[i] = Y(96 + 22 * (float)i + (106 + 21 * (float)i - 96 - 22 * (float)i) * closed);
-        for (int i = 0; i < 5; i++) bar(bits, W, H, lx0, lx1, ly[i], r, [&](float) { return line_c; }, 1);
-        // the notes it has played: faint, on their lines
-        const float k = p * (float)(beats - 1);
-        const int at = std::min(beats - 1, (int)k);
-        for (int j = 0; j < at && closed < 1; j++) {
-            const float gx = lx0 + (lx1 - lx0) * (float)j / (float)(beats - 1);
-            ellipse(bits, W, H, gx, ly[melody[j]], 5 * m, 3.6f * m, -0.349f, gold, 0.32f * (1 - closed));
+        // the stars: fixed places, each twinkling at its own pace; a few gold
+        for (uint32_t i = 0; i < 70; i++) {
+            const uint32_t hsh = hash32(i * 2654435761u + 17);
+            const float sx = (float)(hsh % 680), sy = (float)((hsh >> 10) % 220), ph = (float)((hsh >> 20) & 255) / 40.0f;
+            const float tw = 0.25f + 0.75f * (0.5f + 0.5f * std::sin(t * 1.7f + ph));
+            const float rr = (0.6f + (float)((hsh >> 28) & 3) * 0.35f) * m;
+            ellipse(bits, W, H, X(sx), Y(sy), rr, rr, 0, (hsh & 3) == 0 ? pale : hex(0xDCD6FF), 0.85f * tw);
         }
-        // the gold, up to the head, paler over its last few pixels; a gleam running along it every few seconds
-        const float head = lx0 + (lx1 - lx0) * p;
-        const float run = head - lx0 + 160 * m, sweep = lx0 - 80 * m + run * (t / 3.2f - std::floor(t / 3.2f));
-        if (head > lx0)
-            for (int i = 0; i < 5; i++)
-                bar(bits, W, H, lx0, head, ly[i], r, [&](float x) {
-                    const float d = (x - sweep - (float)i * 6 * m) / (34 * m), gleam = alive ? 0.6f * std::exp(-d * d) : 0;
-                    return mix(gold, pale, std::max(smooth(head - 14 * m, head, x), gleam));
-                }, 1);
-        // the note: a step at the end of each beat, from its line to the next one's
-        const float f = k - (float)at, hop = f < 0.7f ? 0 : (f - 0.7f) / 0.3f;
-        const float ya = ly[melody[at]], yb = ly[melody[std::min(beats - 1, at + 1)]];
-        float ny = ya + (yb - ya) * smooth(0, 1, hop) - std::sin(hop * 3.14159f) * 11 * m;
-        if (v.fraction < 0 && !v.label.empty()) ny = ly[melody[0]] - std::fabs(std::sin(t * 2.2f)) * 9 * m;   // (nothing counted yet)
-        if (alive) ny += std::sin(t * 1.8f) * 2.5f * m;   // (floating)
-        const float nx = (lx0 + (lx1 - lx0) * p) * (1 - closed) + X(334) * closed;
-        ny = ny * (1 - closed) + Y(158) * closed;
+        // the pedestal: the slot at (340, 200); a stone block wider at its foot, on a step with a gold edge
+        const float sx0 = 340, slot = 200;
+        // (the light behind the sword, and the violet mist at the pedestal's foot)
+        const float top = 162 - 120 * p;   // (the pommel's top: the hilt alone out at 0, the tip clear of the stone at 1)
         const float breath = alive ? std::sin(t * 2.1f) : 0;
-        glow(bits, W, H, nx, ny, (44 + 6 * breath + 60 * pulse) * m, gold, 0.30f * (0.85f + 0.15f * breath) * (1 - 0.6f * pulse));
-        if (alive)   // (small notes rising from it, drifting and fading, one after another)
-            for (int k = 0; k < 3; k++) {
-                const float ph = t / 3.6f + (float)k / 3 - std::floor(t / 3.6f + (float)k / 3);
-                const float fx = nx + (14 + 46 * ph) * m + std::sin(ph * 6.28f + 2.1f * (float)k) * 8 * m, fy = ny - (26 + 96 * ph) * m;
-                const float a = 0.55f * std::sin(3.14159f * ph) * (1 - 0.4f * ph);
-                ellipse(bits, W, H, fx, fy, 6 * m, 4.4f * m, -0.349f, pale, a);
-                box(bits, W, H, fx + 3.6f * m, fy - 19 * m, 1.8f * m, 18 * m, pale, a);
-            }
-        frame(bits, W, H, X(262), Y(60), 156 * m, 24 * m, 6 * m, smooth(0.55f, 1, closed), gold);   // (once the lines are in)
-        const float grow = 1 + 0.08f * pulse;
-        ellipse(bits, W, H, nx, ny, 16 * m * grow, 11.5f * m * grow, -0.349f, gold, 1);
-        box(bits, W, H, nx + 10 * m * grow, ny - 54 * m * grow, 5 * m * grow, 52 * m * grow, gold, 1);
+        glow(bits, W, H, X(sx0), Y(top + 70), (90 + 6 * breath + 50 * pulse) * m, gold, (0.10f + 0.28f * p) * (1 - 0.5f * pulse));
+        glow(bits, W, H, X(sx0), Y(240), 150 * m, violet, 0.22f);
+        ellipse(bits, W, H, X(sx0), Y(250), 82 * m, 4.5f * m, 0, hex(0x05040E), 0.45f);
+        box(bits, W, H, X(268), Y(236), 144 * m, 12 * m, hex(0x2A2658), 1);
+        box(bits, W, H, X(268), Y(236), 144 * m, 1.6f * m, gold, 0.8f);
+        trap(bits, W, H, Y(slot), Y(236), X(288), X(392), X(276), X(404), [&](float k) { return mix(hex(0x4A4592), hex(0x26224F), k); }, 1);
+        trap(bits, W, H, Y(slot), Y(236), X(288), X(296), X(276), X(290), [&](float) { return hex(0x000000); }, 0.18f);
+        ellipse(bits, W, H, X(sx0), Y(218), 6.5f * m, 6.5f * m, 0, gold, 1);   // (the carved circle, a violet stone in it)
+        ellipse(bits, W, H, X(sx0), Y(218), 5.2f * m, 5.2f * m, 0, hex(0x3A3580), 1);
+        ellipse(bits, W, H, X(sx0), Y(218), 2.8f * m, 2.8f * m, 0.785f, violet, 1);
+        bar(bits, W, H, X(310), X(330), Y(218), 0.7f * m, [&](float) { return gold; }, 0.6f);
+        bar(bits, W, H, X(350), X(370), Y(218), 0.7f * m, [&](float) { return gold; }, 0.6f);
+        ellipse(bits, W, H, X(sx0), Y(slot), 53.5f * m, 8.2f * m, 0, gold, 1);   // (the top: a gold rim, the stone, its light, the slot)
+        ellipse(bits, W, H, X(sx0), Y(slot), 52 * m, 7 * m, 0, hex(0x5A54AC), 1);
+        glow(bits, W, H, X(sx0), Y(slot), 34 * m, pale, 0.45f * p);
+        ellipse(bits, W, H, X(sx0), Y(slot), 9 * m, 2.4f * m, 0, hex(0x100D26), 1);
+        // the sword, blade down, cut at the slot: what is under the stone is not drawn (the rows from the slot down)
+        const int HC = std::max(0, std::min(H, (int)Y(slot)));
+        const float T = top;
+        ellipse(bits, W, HC, X(sx0), Y(T + 4), 5 * m, 5 * m, 0, gold, 1);   // (the pommel and its stone)
+        ellipse(bits, W, HC, X(sx0), Y(T + 4), 2 * m, 2 * m, 0, hex(0x6A5AE6), 1);
+        box(bits, W, HC, X(sx0 - 3), Y(T + 8), 6 * m, 24 * m, hex(0x6A5AE6), 1);   // (the grip and its wraps)
+        for (int k = 0; k < 3; k++) box(bits, W, HC, X(sx0 - 3), Y(T + 13 + 6 * (float)k), 6 * m, 1.5f * m, hex(0x4B3CC4), 1);
+        trap(bits, W, HC, Y(T + 38), Y(T + 138), X(sx0 - 5.5f), X(sx0 + 5.5f), X(sx0 - 5.5f), X(sx0 + 5.5f), [&](float) { return hex(0xC9D3EE); }, 1);
+        trap(bits, W, HC, Y(T + 138), Y(T + 150), X(sx0 - 5.5f), X(sx0 + 5.5f), X(sx0), X(sx0), [&](float) { return hex(0xC9D3EE); }, 1);
+        trap(bits, W, HC, Y(T + 38), Y(T + 138), X(sx0), X(sx0 + 5.5f), X(sx0), X(sx0 + 5.5f), [&](float) { return hex(0xEEF2FF); }, 1);
+        trap(bits, W, HC, Y(T + 138), Y(T + 150), X(sx0), X(sx0 + 5.5f), X(sx0), X(sx0), [&](float) { return hex(0xEEF2FF); }, 1);
+        box(bits, W, HC, X(sx0 - 0.5f), Y(T + 42), 1 * m, 90 * m, hex(0x8C98C6), 1);   // (the fuller)
+        bar(bits, W, HC, X(sx0 - 15), X(sx0 + 15), Y(T + 34), 3 * m, [&](float) { return gold; }, 1);   // (the guard, its ends, its gem)
+        ellipse(bits, W, HC, X(sx0 - 16), Y(T + 34), 3.6f * m, 3.6f * m, 0, gold, 1);
+        ellipse(bits, W, HC, X(sx0 + 16), Y(T + 34), 3.6f * m, 3.6f * m, 0, gold, 1);
+        ellipse(bits, W, HC, X(sx0), Y(T + 34), 4.4f * m, 4.4f * m, 0, pale, 1);
+        ellipse(bits, W, HC, X(sx0), Y(T + 34), 3.3f * m, 3.3f * m, 0, hex(0x4B3CC4), 1);
+        if (alive) {   // (a gleam running down the blade every few seconds)
+            const float g = std::fmod(t / 2.8f, 1.0f), gy = T + 40 + 105 * g;
+            glow(bits, W, HC, X(sx0 + 2), Y(gy), 9 * m, pale, 0.5f * std::sin(3.14159f * g));
+        }
     } else {
-        fill(dc, 0, 0, W, H, RGB(0x14, 0x2A, 0x1F));
+        fill(dc, 0, 0, W, H, RGB(0x12, 0x10, 0x2A));
     }
     GdiFlush();
     SetBkMode(dc, TRANSPARENT);
@@ -379,16 +394,16 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
     const auto typeface = [&](float px, const char* rubik, int weight) {
         return face(own ? rubik : "Segoe UI", std::max(8, (int)std::lround(px * m)), own ? (weight == FW_BOLD ? FW_BOLD : FW_NORMAL) : weight);
     };
-    HFONT big = typeface(38, "Rubik ExtraBold", FW_HEAVY), line = typeface(13, "Rubik", FW_NORMAL), sign = typeface(11, "Rubik", FW_BOLD);
+    HFONT big = typeface(34, "Rubik ExtraBold", FW_HEAVY), line = typeface(13, "Rubik", FW_NORMAL), sign = typeface(11, "Rubik", FW_BOLD);
     HGDIOBJ old = SelectObject(dc, big);
     SetTextAlign(dc, TA_CENTER | TA_TOP);
     const int cx = W / 2;
     if (!v.label.empty()) {
-        // the number, in the mark's gold, and one line under it: what is being done and the time left
-        if (!v.pct.empty()) {   // (during the ending, the number the gold shows: it reaches 100% with it)
+        // the number, in gold, and one line under it: what is being done and the time left
+        if (!v.pct.empty()) {   // (during the ending, the number the sword shows: it reaches 100% with it)
             const std::string n = (v.outro >= 0 ? std::to_string((int)std::lround(p * 100)) : v.pct) + "%";
-            SetTextColor(dc, RGB(0xD9, 0xB8, 0x66));
-            TextOutA(dc, cx, (int)Y(248), n.c_str(), (int)n.size());
+            SetTextColor(dc, RGB(0xE2, 0xBE, 0x5A));
+            TextOutA(dc, cx, (int)Y(262), n.c_str(), (int)n.size());
         }
         std::string says = v.label == "CLOSING"    ? "Closing: what is done is kept for the next start"
                            : v.label == "STARTING" ? "Starting the game"
@@ -396,13 +411,13 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
                                                             : "Preparing shaders";
         if (!v.right.empty() && v.label == "LOADING") says += "  \xB7  " + v.right;
         SelectObject(dc, line);
-        SetTextColor(dc, RGB(0x9E, 0xA2, 0x91));   // (the cream, two thirds of the way from the green)
-        TextOutA(dc, cx, (int)Y(v.pct.empty() ? 262 : 294), says.c_str(), (int)says.size());
+        SetTextColor(dc, RGB(0xB3, 0xAD, 0xD6));
+        TextOutA(dc, cx, (int)Y(v.pct.empty() ? 270 : 304), says.c_str(), (int)says.size());
     }
     // the name, small, in spaced capitals at the bottom, and the version after it
     SelectObject(dc, sign);
-    SetTextColor(dc, RGB(0x75, 0x67, 0x34));   // (the gold, a little over half way from the green)
-    std::string name = "PROJECT RELINK";
+    SetTextColor(dc, RGB(0xA8, 0x8E, 0x4A));
+    std::string name = "RELINK-R";
     if (!v.version.empty()) name += "   " + v.version;
     spaced(dc, name, cx, (int)Y(383 - 16 - 13), std::max(1, (int)std::lround(3 * m)), true);
     SetTextAlign(dc, TA_LEFT | TA_TOP);

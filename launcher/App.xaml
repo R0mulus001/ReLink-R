@@ -3,50 +3,55 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml" ShutdownMode="OnMainWindowClose">
   <Application.Resources>
-    <!-- The launcher is the game's cartridge, as its in-game menu is (gpu/vk/vk_menu.cpp): a grey shell with its grooves, a
+    <!-- (ReLink-R) Night violet and gold, round corners, the sword: the resource names are the cartridge's as before.
+         The launcher is the game's cartridge, as its in-game menu is (gpu/vk/vk_menu.cpp): a grey shell with its grooves, a
          dark side for what to do, a cream label for the pages. The pages' colours are the controller's: red, yellow, green and
          blue, one a part (Accent: set by each page). The type is the game's own, Rubik (assets/fonts). -->
-    <Color x:Key="CGold">#C9A24B</Color>
-    <Color x:Key="CTunic">#3E8A4E</Color>
+    <Color x:Key="CGold">#E2BE5A</Color>
+    <Color x:Key="CTunic">#6A5AE6</Color>
     <!-- (the words on the label: Bone is the ink now, the soft and faint greys after it) -->
-    <SolidColorBrush x:Key="Bone" Color="#2A2724"/>
-    <SolidColorBrush x:Key="BoneSoft" Color="#6B655C"/>
-    <SolidColorBrush x:Key="BoneFaint" Color="#8A8376"/>
-    <SolidColorBrush x:Key="HelpInk" Color="#4A453E"/>
+    <SolidColorBrush x:Key="Bone" Color="#EEEBFA"/>
+    <SolidColorBrush x:Key="BoneSoft" Color="#B3ADD6"/>
+    <SolidColorBrush x:Key="BoneFaint" Color="#8F89B8"/>
+    <SolidColorBrush x:Key="HelpInk" Color="#C9C4E6"/>
     <SolidColorBrush x:Key="Gold" Color="{StaticResource CGold}"/>
     <SolidColorBrush x:Key="Tunic" Color="{StaticResource CTunic}"/>
-    <SolidColorBrush x:Key="Rule" Color="#E2DBCB"/>
-    <SolidColorBrush x:Key="Warn" Color="#C0473D"/>
+    <SolidColorBrush x:Key="Rule" Color="#38337A"/>
+    <SolidColorBrush x:Key="Warn" Color="#F07A7A"/>
     <!-- (the cartridge) -->
-    <SolidColorBrush x:Key="Shell" Color="#B9B4AA"/>
-    <SolidColorBrush x:Key="Groove" Color="#A39E93"/>
-    <SolidColorBrush x:Key="Label" Color="#ECE6D8"/>
-    <SolidColorBrush x:Key="Off" Color="#CFC7B6"/>
-    <SolidColorBrush x:Key="Track" Color="#D6CDB9"/>
-    <SolidColorBrush x:Key="Side" Color="#2A2733"/>
-    <SolidColorBrush x:Key="SideHover" Color="#3A3646"/>
-    <SolidColorBrush x:Key="SideText" Color="#ECE6D8"/>
-    <SolidColorBrush x:Key="SideSoft" Color="#A8A2B5"/>
+    <SolidColorBrush x:Key="Shell" Color="#12102A"/>
+    <SolidColorBrush x:Key="Groove" Color="#1A1738"/>
+    <SolidColorBrush x:Key="Label" Color="#1C1940"/>
+    <SolidColorBrush x:Key="Off" Color="#38337A"/>
+    <SolidColorBrush x:Key="Track" Color="#2E2A5C"/>
+    <SolidColorBrush x:Key="Side" Color="#12102A"/>
+    <SolidColorBrush x:Key="SideHover" Color="#262252"/>
+    <SolidColorBrush x:Key="SideText" Color="#EEEBFA"/>
+    <SolidColorBrush x:Key="SideSoft" Color="#B3ADD6"/>
     <!-- (the controller's colours: a strip, the light tint of a selected row, that row's edge) -->
-    <SolidColorBrush x:Key="Red" Color="#C0473D"/>
-    <SolidColorBrush x:Key="RedTint" Color="#F2D6D0"/>
-    <SolidColorBrush x:Key="RedEdge" Color="#D98E86"/>
-    <SolidColorBrush x:Key="Yellow" Color="#D4A532"/>
-    <SolidColorBrush x:Key="YellowTint" Color="#F3E6BE"/>
-    <SolidColorBrush x:Key="YellowEdge" Color="#E3C474"/>
-    <SolidColorBrush x:Key="Green" Color="#3E8A4E"/>
-    <SolidColorBrush x:Key="GreenTint" Color="#D3E6D2"/>
-    <SolidColorBrush x:Key="GreenEdge" Color="#88B890"/>
-    <SolidColorBrush x:Key="Blue" Color="#3F5FB0"/>
-    <SolidColorBrush x:Key="BlueTint" Color="#D5DCEF"/>
-    <SolidColorBrush x:Key="BlueEdge" Color="#8A9DD0"/>
-    <SolidColorBrush x:Key="Accent" Color="#C0473D"/>
-    <SolidColorBrush x:Key="AccentTint" Color="#F2D6D0"/>
-    <SolidColorBrush x:Key="AccentEdge" Color="#D98E86"/>
+    <SolidColorBrush x:Key="Red" Color="#7A6AF0"/>
+    <SolidColorBrush x:Key="RedTint" Color="#2B2766"/>
+    <SolidColorBrush x:Key="RedEdge" Color="#9A8CF5"/>
+    <SolidColorBrush x:Key="Yellow" Color="#E2BE5A"/>
+    <SolidColorBrush x:Key="YellowTint" Color="#3A3150"/>
+    <SolidColorBrush x:Key="YellowEdge" Color="#E2BE5A"/>
+    <SolidColorBrush x:Key="Green" Color="#4FA06A"/>
+    <SolidColorBrush x:Key="GreenTint" Color="#1F3A3A"/>
+    <SolidColorBrush x:Key="GreenEdge" Color="#6FC28A"/>
+    <SolidColorBrush x:Key="Blue" Color="#4B3CC4"/>
+    <SolidColorBrush x:Key="BlueTint" Color="#262252"/>
+    <SolidColorBrush x:Key="BlueEdge" Color="#6A5AE6"/>
+    <SolidColorBrush x:Key="Indigo" Color="#5C55C8"/>
+    <SolidColorBrush x:Key="IndigoTint" Color="#24224E"/>
+    <SolidColorBrush x:Key="IndigoEdge" Color="#8A84E0"/>
+    <SolidColorBrush x:Key="Ink" Color="#1A1530"/>   <!-- (ReLink-R: the words on the gold) -->
+    <SolidColorBrush x:Key="Accent" Color="#7A6AF0"/>
+    <SolidColorBrush x:Key="AccentTint" Color="#2B2766"/>
+    <SolidColorBrush x:Key="AccentEdge" Color="#9A8CF5"/>
     <SolidColorBrush x:Key="AccentOn" Color="White"/>   <!-- (the words on the colour: dark on the yellow) -->
     <!-- (the staff over the sky: light) -->
-    <SolidColorBrush x:Key="StaffBone" Color="#F3EEE2"/>
-    <SolidColorBrush x:Key="StaffFaint" Color="#D9D2BF"/>
+    <SolidColorBrush x:Key="StaffBone" Color="#F6E3A6"/>
+    <SolidColorBrush x:Key="StaffFaint" Color="#B3ADD6"/>
     <FontFamily x:Key="Display">pack://application:,,,/fonts/#Rubik</FontFamily>
     <FontFamily x:Key="Text">pack://application:,,,/fonts/#Rubik</FontFamily>
     <FontFamily x:Key="Mono">Cascadia Mono, Consolas</FontFamily>
@@ -201,7 +206,7 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="pill" Property="Background" Value="#14000000"/>
+                <Setter TargetName="pill" Property="Background" Value="#18FFFFFF"/>
                 <Setter Property="Foreground" Value="{StaticResource Bone}"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
@@ -234,7 +239,7 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="b" Property="Background" Value="#0C000000"/>
+                <Setter TargetName="b" Property="Background" Value="#12FFFFFF"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
                 <Setter TargetName="bar" Property="Opacity" Value="1"/>
@@ -292,7 +297,7 @@
       </Setter>
     </Style>
 
-    <!-- Play: the controller's green, round, set a little above its shadow. It goes down when pressed. -->
+    <!-- Play (ReLink-R: gold, dark words): round, set a little above its shadow. It goes down when pressed. -->
     <Style x:Key="Play" TargetType="Button">
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
@@ -300,10 +305,10 @@
         <Setter.Value>
           <ControlTemplate TargetType="Button">
             <Grid>
-              <Border CornerRadius="12" Background="#2C6438" Margin="0,4,0,0"/>
-              <Border x:Name="plate" CornerRadius="12" Background="{StaticResource Green}" Margin="0,0,0,4">
+              <Border CornerRadius="14" Background="#A88A3A" Margin="0,4,0,0"/>
+              <Border x:Name="plate" CornerRadius="14" Background="{StaticResource Gold}" Margin="0,0,0,4">
                 <Grid>
-                  <Border x:Name="shade" CornerRadius="12" Background="White" Opacity="0"/>
+                  <Border x:Name="shade" CornerRadius="14" Background="White" Opacity="0"/>
                   <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 </Grid>
               </Border>
@@ -437,7 +442,7 @@
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="b" Property="Background" Value="#22000000"/>
+                <Setter TargetName="b" Property="Background" Value="#22FFFFFF"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -528,7 +533,7 @@
               <ToggleButton Focusable="False" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press">
                 <ToggleButton.Template>
                   <ControlTemplate TargetType="ToggleButton">
-                    <Border x:Name="bb" Background="#F6F2E8" BorderBrush="{StaticResource Off}" BorderThickness="1" CornerRadius="8">
+                    <Border x:Name="bb" Background="#262252" BorderBrush="{StaticResource Off}" BorderThickness="1" CornerRadius="8">
                       <Path HorizontalAlignment="Right" Margin="0,0,10,0" VerticalAlignment="Center" Data="M0,0 L5,5 L10,0" Stroke="{StaticResource BoneSoft}" StrokeThickness="1.6"/>
                     </Border>
                     <ControlTemplate.Triggers>

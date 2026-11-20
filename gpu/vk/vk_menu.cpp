@@ -1307,16 +1307,18 @@ void fill(HDC dc, int x, int y, int w, int h, COLORREF c) {
 }
 
 namespace cart {
-constexpr COLORREF kShell = RGB(0xB9, 0xB4, 0xAA), kGroove = RGB(0xA3, 0x9E, 0x93), kLabel = RGB(0xEC, 0xE6, 0xD8),
-                   kInk = RGB(0x2A, 0x27, 0x24), kSoft = RGB(0x6B, 0x65, 0x5C), kFaint = RGB(0x8A, 0x83, 0x76),
-                   kRule = RGB(0xE2, 0xDB, 0xCB), kOff = RGB(0xCF, 0xC7, 0xB6), kTrack = RGB(0xD6, 0xCD, 0xB9),
-                   kHelp = RGB(0x4A, 0x45, 0x3E), kTagInk = RGB(0x8A, 0x6A, 0x10), kTag = RGB(0xF3, 0xE3, 0xB5),
-                   kYellow = RGB(0xD4, 0xA5, 0x32), kBlue = RGB(0x3F, 0x5F, 0xB0), kGreen = RGB(0x3E, 0x8A, 0x4E);
+// (ReLink-R: the night violet and gold look; the names keep the cartridge's parts: the shell around the label, the grooves on
+// it, the label the rows are on, its ink)
+constexpr COLORREF kShell = RGB(0x0F, 0x0D, 0x24), kGroove = RGB(0x19, 0x16, 0x36), kLabel = RGB(0x1C, 0x19, 0x40),
+                   kInk = RGB(0xEE, 0xEB, 0xFA), kSoft = RGB(0xB3, 0xAD, 0xD6), kFaint = RGB(0x8F, 0x89, 0xB8),
+                   kRule = RGB(0x38, 0x33, 0x7A), kOff = RGB(0x2E, 0x2A, 0x5C), kTrack = RGB(0x2E, 0x2A, 0x5C),
+                   kHelp = RGB(0xC9, 0xC4, 0xE6), kTagInk = RGB(0x1A, 0x15, 0x30), kTag = RGB(0xE2, 0xBE, 0x5A),
+                   kYellow = RGB(0xE2, 0xBE, 0x5A), kBlue = RGB(0x7A, 0x6A, 0xF0), kGreen = RGB(0x5F, 0xB3, 0x7A);
 struct TabLook { COLORREF strip, on, tint, edge; };
 // (a tab's strip, the text on it, the selected row's tint and that row's edge: the strip half over the tint)
-constexpr TabLook kTabs[3] = {{RGB(0xC0, 0x47, 0x3D), RGB(255, 255, 255), RGB(0xF2, 0xD6, 0xD0), RGB(0xD9, 0x8E, 0x86)},
-                              {RGB(0x3E, 0x8A, 0x4E), RGB(255, 255, 255), RGB(0xD3, 0xE6, 0xD2), RGB(0x88, 0xB8, 0x90)},
-                              {RGB(0x3F, 0x5F, 0xB0), RGB(255, 255, 255), RGB(0xD5, 0xDC, 0xEF), RGB(0x8A, 0x9D, 0xD0)}};
+constexpr TabLook kTabs[3] = {{RGB(0x6A, 0x5A, 0xE6), RGB(255, 255, 255), RGB(0x2B, 0x27, 0x66), RGB(0xE2, 0xBE, 0x5A)},
+                              {RGB(0x4B, 0x3C, 0xC4), RGB(255, 255, 255), RGB(0x26, 0x22, 0x52), RGB(0xE2, 0xBE, 0x5A)},
+                              {RGB(0x3F, 0x37, 0xA0), RGB(255, 255, 255), RGB(0x22, 0x20, 0x4E), RGB(0xE2, 0xBE, 0x5A)}};
 COLORREF mix(COLORREF a, COLORREF b, float t) {
     const auto ch = [t](int x, int y) { return (int)std::lround(x + (y - x) * t); };
     return RGB(ch(GetRValue(a), GetRValue(b)), ch(GetGValue(a), GetGValue(b)), ch(GetBValue(a), GetBValue(b)));
@@ -1785,7 +1787,7 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     HGDIOBJ old = SelectObject(dc, small);
     if (pending) {
         startup_gdi::round_rect(dc, lx + P(12), pend_top + P(3), lw - P(24), P(kOptPendH) - P(8), P(8), kTag);
-        SetTextColor(dc, RGB(0x6B, 0x52, 0x0C));
+        SetTextColor(dc, kTagInk);
         const std::string line = restart_line(dc, lw - P(48)) + " (when the menu closes)";
         TextOutA(dc, lx + P(24), pend_top + P(3) + (P(kOptPendH) - P(8) - text_h(dc)) / 2, line.c_str(), (int)line.size());
     }
@@ -2567,7 +2569,7 @@ void paint_travel_cart(HDC dc, uint32_t w, uint32_t h) {
     } else {   // (none yet: soft stripes, and how one comes)
         for (int yy = 0; yy < ph && paint_bits && py + yy < H; yy++) {
             uint32_t* row = paint_bits + (size_t)(py + yy) * W;
-            for (int xx = 0; xx < cw && cl + xx < W; xx++) row[cl + xx] = ((xx + yy) / P(14)) % 2 ? 0xE2DBCB : 0xE8E2D4;
+            for (int xx = 0; xx < cw && cl + xx < W; xx++) row[cl + xx] = ((xx + yy) / P(14)) % 2 ? 0x1E1B42 : 0x221F4A;
         }
         SelectObject(dc, help_f);
         SetTextColor(dc, kSoft);
@@ -2599,7 +2601,7 @@ void paint_travel_cart(HDC dc, uint32_t w, uint32_t h) {
         // Go, at the card's bottom right
         SelectObject(dc, go_f);
         const int bw = text_w(dc, "Go there") + P(40), bh = P(38), bx = cr - bw, by = std::max(py + ph + P(16), body_bottom - bh);
-        startup_gdi::round_rect(dc, bx, by + P(3), bw, bh, P(12), RGB(0x2C, 0x64, 0x38));
+        startup_gdi::round_rect(dc, bx, by + P(3), bw, bh, P(12), RGB(0x2E, 0x25, 0x8A));
         startup_gdi::round_rect(dc, bx, by, bw, bh, P(12), look.strip);
         SetTextColor(dc, look.on);
         TextOutA(dc, bx + (bw - text_w(dc, "Go there")) / 2, by + (bh - text_h(dc)) / 2, "Go there", 8);
@@ -2864,7 +2866,7 @@ void paint_menu(HDC dc, uint32_t w, uint32_t h, int s) {
     // the Controls tab's blue for the controls, yellow for the restart question and red for Quit game's
     const int look = page == 5 ? (ask_quit ? 0 : -1) : page == 1 ? 2 : 1;
     const COLORREF strip = look < 0 ? cart::kYellow : cart::kTabs[look].strip, tint = look < 0 ? cart::kTag : cart::kTabs[look].tint,
-                   edge = look < 0 ? RGB(0xE3, 0xC4, 0x74) : cart::kTabs[look].edge, on = look < 0 ? cart::kInk : cart::kTabs[look].on;
+                   edge = look < 0 ? RGB(0xE3, 0xC4, 0x74) : cart::kTabs[look].edge, on = look < 0 ? cart::kTagInk : cart::kTabs[look].on;
     const char* heading = page == 6 ? "Travel" : page == 5 ? (ask_quit ? "Quit game" : "Restart needed") : page == 4 ? "Inventory" : page == 3 ? "Teleport"
                         : page == 2 ? "Cheats" : "Controls";
     cart_page(dc, (int)w, (int)h, s, heading, strip, on);

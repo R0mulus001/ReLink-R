@@ -1,7 +1,7 @@
 <Window x:Class="ReLink.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Project ReLink" Width="1120" Height="700" WindowStyle="None" ResizeMode="CanMinimize"
+        Title="ReLink-R" Width="1120" Height="700" WindowStyle="None" ResizeMode="CanMinimize"
         WindowStartupLocation="CenterScreen" Background="{StaticResource Shell}" Foreground="{StaticResource Bone}"
         FontFamily="{StaticResource Text}" FontSize="14.5" Icon="app.ico" AllowDrop="True" UseLayoutRounding="True">
   <WindowChrome.WindowChrome>
@@ -41,15 +41,15 @@
       <Border x:Name="LeftColumn" Background="{StaticResource Side}" CornerRadius="12" Margin="12,0,0,12" Padding="12,16,12,10">
         <DockPanel LastChildFill="False">
           <StackPanel DockPanel.Dock="Top">
-            <TextBlock Text="Project ReLink" FontWeight="ExtraBold" FontSize="19" Foreground="{StaticResource SideText}" Margin="6,0,0,0"/>
+            <TextBlock Text="ReLink-R" FontWeight="ExtraBold" FontSize="19" Foreground="{StaticResource SideText}" Margin="6,0,0,0"/>
             <StackPanel x:Name="NavPanel" Margin="0,18,0,0">
               <RadioButton x:Name="NavHome" Style="{StaticResource Nav}" GroupName="Nav" IsChecked="True" Checked="NavChanged" Tag="&#xE80F;" BorderBrush="{StaticResource SideText}"/>
               <RadioButton x:Name="NavOptions" Style="{StaticResource Nav}" GroupName="Nav" Checked="NavChanged" Tag="&#xE9E9;" BorderBrush="{StaticResource Red}"/>
-              <RadioButton x:Name="NavMods" Style="{StaticResource Nav}" GroupName="Nav" Checked="NavChanged" Tag="&#xEA86;" BorderBrush="{StaticResource Green}">
+              <RadioButton x:Name="NavMods" Style="{StaticResource Nav}" GroupName="Nav" Checked="NavChanged" Tag="&#xEA86;" BorderBrush="{StaticResource Indigo}">
                 <DockPanel Width="118" LastChildFill="False">
                   <TextBlock x:Name="NavModsText" Text="Mods"/>
-                  <Border x:Name="ModsBadge" DockPanel.Dock="Right" Background="#E0873A" CornerRadius="9" MinWidth="18" Height="18" Padding="5,0" Visibility="Collapsed">
-                    <TextBlock Text="!" FontSize="12" FontWeight="ExtraBold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                  <Border x:Name="ModsBadge" DockPanel.Dock="Right" Background="#E2BE5A" CornerRadius="9" MinWidth="18" Height="18" Padding="5,0" Visibility="Collapsed">
+                    <TextBlock Text="!" FontSize="12" FontWeight="ExtraBold" Foreground="#1A1530" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                   </Border>
                 </DockPanel>
               </RadioButton>
@@ -58,7 +58,7 @@
           <StackPanel DockPanel.Dock="Bottom">
             <!-- the state card: what (a version, the install, the update), its state in a pill, a line when there is something to
                  say, the way from the copy to Play while it is built, and the one button that matters here -->
-            <Border x:Name="StatusCard" Background="#35303F" CornerRadius="10" Padding="12,11,12,12">
+            <Border x:Name="StatusCard" Background="#262252" CornerRadius="10" Padding="12,11,12,12">
               <StackPanel>
                 <DockPanel LastChildFill="True">
                   <Border x:Name="StatePill" DockPanel.Dock="Right" CornerRadius="9" Padding="8,2,8,3" VerticalAlignment="Center" Visibility="Collapsed">
@@ -71,7 +71,7 @@
                 <StackPanel x:Name="StepList" Margin="0,8,0,0" Visibility="Collapsed"/>
                 <Button x:Name="UpdateLink" Style="{StaticResource GoldButton}" Margin="0,10,0,0" Visibility="Collapsed" Click="UpdateClick"/>
                 <Button x:Name="MainButton" Style="{StaticResource Play}" Height="54" Margin="0,10,0,0" Click="MainClick">
-                  <TextBlock x:Name="MainButtonText" FontWeight="ExtraBold" FontSize="20" Foreground="White"/>
+                  <TextBlock x:Name="MainButtonText" FontWeight="ExtraBold" FontSize="20" Foreground="#1A1530"/>
                 </Button>
               </StackPanel>
             </Border>
@@ -103,13 +103,13 @@
               <!-- Play, where the eye goes (what it will show: the cards under the sky) -->
               <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,20,18">
                 <Button x:Name="HeroPlay" Style="{StaticResource Play}" Width="210" Height="58" HorizontalAlignment="Right" Click="MainClick">
-                  <TextBlock x:Name="HeroPlayText" FontWeight="ExtraBold" FontSize="22" Foreground="White"/>
+                  <TextBlock x:Name="HeroPlayText" FontWeight="ExtraBold" FontSize="22" Foreground="#1A1530"/>
                 </Button>
               </StackPanel>
             </Grid>
             <Grid Grid.Row="2" Margin="0,12,0,0">
               <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <Border x:Name="LooksCard" BorderBrush="{StaticResource Red}" BorderThickness="0,4,0,0" Background="#E5DECE" CornerRadius="10" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="LooksClick">
+              <Border x:Name="LooksCard" BorderBrush="{StaticResource Red}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="LooksClick">
                 <DockPanel LastChildFill="False">
                   <TextBlock DockPanel.Dock="Bottom" x:Name="LooksMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Red}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
@@ -119,7 +119,7 @@
                   </StackPanel>
                 </DockPanel>
               </Border>
-              <Border x:Name="MovesCard" Grid.Column="2" BorderBrush="{StaticResource Yellow}" BorderThickness="0,4,0,0" Background="#E5DECE" CornerRadius="10" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="MovesClick">
+              <Border x:Name="MovesCard" Grid.Column="2" BorderBrush="{StaticResource Yellow}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="MovesClick">
                 <DockPanel LastChildFill="False">
                   <TextBlock DockPanel.Dock="Bottom" x:Name="MovesMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Yellow}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
@@ -129,7 +129,7 @@
                   </StackPanel>
                 </DockPanel>
               </Border>
-              <Border x:Name="ModsCard" Grid.Column="4" BorderBrush="{StaticResource Green}" BorderThickness="0,4,0,0" Background="#E5DECE" CornerRadius="10" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="ModsCardClick">
+              <Border x:Name="ModsCard" Grid.Column="4" BorderBrush="{StaticResource Indigo}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="ModsCardClick">
                 <DockPanel LastChildFill="False">
                   <TextBlock DockPanel.Dock="Bottom" x:Name="ModsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Green}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
@@ -139,7 +139,7 @@
                   </StackPanel>
                 </DockPanel>
               </Border>
-              <Border x:Name="NewsCard" Grid.Column="6" BorderBrush="{StaticResource Blue}" BorderThickness="0,4,0,0" Background="#E5DECE" CornerRadius="10" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="NewsCardClick">
+              <Border x:Name="NewsCard" Grid.Column="6" BorderBrush="{StaticResource Blue}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="NewsCardClick">
                 <DockPanel LastChildFill="False">
                   <TextBlock DockPanel.Dock="Bottom" x:Name="NewsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Blue}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
@@ -185,7 +185,7 @@
           <!-- the install at work: how far it is, its steps one a row, the one at work marked -->
           <Grid x:Name="BuildView" Visibility="Collapsed">
             <Grid.Resources>
-              <StaticResource x:Key="Accent" ResourceKey="Green"/><StaticResource x:Key="AccentTint" ResourceKey="GreenTint"/><StaticResource x:Key="AccentEdge" ResourceKey="GreenEdge"/>
+              <StaticResource x:Key="Accent" ResourceKey="Indigo"/><StaticResource x:Key="AccentTint" ResourceKey="IndigoTint"/><StaticResource x:Key="AccentEdge" ResourceKey="IndigoEdge"/>
             </Grid.Resources>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
@@ -199,7 +199,7 @@
             </Grid>
             <StackPanel x:Name="StageList" Grid.Row="3"/>
             <TextBox x:Name="Log" Grid.Row="3" Visibility="Collapsed" IsReadOnly="True" FontFamily="{StaticResource Mono}" FontSize="11.5"
-                     Background="#E5DECE" Foreground="{StaticResource HelpInk}" BorderThickness="0" Padding="10" TextWrapping="Wrap"
+                     Background="#1C1940" Foreground="{StaticResource HelpInk}" BorderThickness="0" Padding="10" TextWrapping="Wrap"
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"/>
             <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="2,12,0,0">
               <Button x:Name="LogLink" Style="{StaticResource Link}" Margin="0,0,22,0" Click="LogToggled"/>
@@ -237,7 +237,7 @@
           <!-- Mods: what is in the game folder's mods, on or off -->
           <Grid x:Name="ModsView" Visibility="Collapsed">
             <Grid.Resources>
-              <StaticResource x:Key="Accent" ResourceKey="Green"/><StaticResource x:Key="AccentTint" ResourceKey="GreenTint"/><StaticResource x:Key="AccentEdge" ResourceKey="GreenEdge"/>
+              <StaticResource x:Key="Accent" ResourceKey="Indigo"/><StaticResource x:Key="AccentTint" ResourceKey="IndigoTint"/><StaticResource x:Key="AccentEdge" ResourceKey="IndigoEdge"/>
             </Grid.Resources>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
             <Border Style="{StaticResource Strip}" Background="{StaticResource Green}" HorizontalAlignment="Left">
@@ -269,11 +269,11 @@
                 <StackPanel x:Name="RowsDisplay" Margin="0,0,10,0"/>
               </ScrollViewer>
               <ScrollViewer x:Name="PageSmooth" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed">
-                <ScrollViewer.Resources><StaticResource x:Key="AccentOn" ResourceKey="Bone"/><StaticResource x:Key="Accent" ResourceKey="Yellow"/><StaticResource x:Key="AccentTint" ResourceKey="YellowTint"/><StaticResource x:Key="AccentEdge" ResourceKey="YellowEdge"/></ScrollViewer.Resources>
+                <ScrollViewer.Resources><StaticResource x:Key="AccentOn" ResourceKey="Ink"/><StaticResource x:Key="Accent" ResourceKey="Yellow"/><StaticResource x:Key="AccentTint" ResourceKey="YellowTint"/><StaticResource x:Key="AccentEdge" ResourceKey="YellowEdge"/></ScrollViewer.Resources>
                 <StackPanel x:Name="RowsSmooth" Margin="0,0,10,0"/>
               </ScrollViewer>
               <ScrollViewer x:Name="PageGame" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed">
-                <ScrollViewer.Resources><StaticResource x:Key="Accent" ResourceKey="Green"/><StaticResource x:Key="AccentTint" ResourceKey="GreenTint"/><StaticResource x:Key="AccentEdge" ResourceKey="GreenEdge"/></ScrollViewer.Resources>
+                <ScrollViewer.Resources><StaticResource x:Key="Accent" ResourceKey="Indigo"/><StaticResource x:Key="AccentTint" ResourceKey="IndigoTint"/><StaticResource x:Key="AccentEdge" ResourceKey="IndigoEdge"/></ScrollViewer.Resources>
                 <StackPanel x:Name="RowsGame" Margin="0,0,10,0"/>
               </ScrollViewer>
               <ScrollViewer x:Name="PageControls" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="Collapsed">

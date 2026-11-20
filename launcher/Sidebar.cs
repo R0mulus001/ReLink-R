@@ -48,9 +48,9 @@ public partial class MainWindow
         (StatePill.Background, StatePillText.Foreground) = kind switch
         {
             Pill.Good => (Res("Green"), (Brush)Brushes.White),
-            Pill.Gold => (Res("Yellow"), new SolidColorBrush(Color.FromRgb(0x41, 0x24, 0x02))),
+            Pill.Gold => (Res("Yellow"), new SolidColorBrush(Color.FromRgb(0x1A, 0x15, 0x30))),
             Pill.Red => (Res("Red"), Brushes.White),
-            _ => (new SolidColorBrush(Color.FromRgb(0x4A, 0x45, 0x55)), Res("SideText")),
+            _ => (new SolidColorBrush(Color.FromRgb(0x38, 0x33, 0x7A)), Res("SideText")),
         };
     }
 
