@@ -63,7 +63,7 @@ static class Scene
         sky.GradientStops.Add(new GradientStop(C("161335"), 1));
         canvas.Children.Add(new Rectangle { Width = w, Height = h, Fill = sky });
 
-        const double x = 790, slot = 232;   // (the sword's place: over the right of the picture, clear of the staff)
+        const double x = 719, slot = 208;   // (ReLink-R: the sword over Play, on its axis: Play is 210 wide, 20 from the right of the 844 sky, 18 from its bottom; the pedestal's step, 208 wide, ends 12 above it)
         var halo = new RadialGradientBrush { GradientOrigin = new(0.5, 0.5), Center = new(0.5, 0.5), RadiusX = 0.5, RadiusY = 0.5 };
         halo.GradientStops.Add(new GradientStop(Color.FromArgb(0x70, 0x5A, 0x48, 0xD8), 0));
         halo.GradientStops.Add(new GradientStop(Color.FromArgb(0x00, 0x5A, 0x48, 0xD8), 1));
