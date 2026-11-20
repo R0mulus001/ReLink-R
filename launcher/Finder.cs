@@ -75,8 +75,8 @@ static class Finder
 
     // ---- shortcuts to the installed game ----
 
-    public static string DesktopLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Project ReLink.lnk");
-    public static string StartLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Project ReLink.lnk");
+    public static string DesktopLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "ReLink-R.lnk");
+    public static string StartLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "ReLink-R.lnk");
 
     /// The shortcuts the player has, made again (after an update); none made where there was none
     public static void RefreshShortcuts(string gameFolder) => Shortcuts(gameFolder, File.Exists(DesktopLink), File.Exists(StartLink));
@@ -104,7 +104,7 @@ static class Finder
                 if (args.Length > 0) sl.SetArguments(args);
                 sl.SetWorkingDirectory(gameFolder);
                 sl.SetIconLocation(File.Exists(self) ? self : target, 0);
-                sl.SetDescription(L("Ocarina of Time sur PC, avec Project ReLink", "Ocarina of Time on PC, with Project ReLink"));
+                sl.SetDescription(L("Ocarina of Time sur PC, avec ReLink-R", "Ocarina of Time on PC, with ReLink-R"));
                 Directory.CreateDirectory(Path.GetDirectoryName(link)!);
                 ((System.Runtime.InteropServices.ComTypes.IPersistFile)sl).Save(link, true);
             }

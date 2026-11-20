@@ -8,7 +8,10 @@ Changes against upstream:
 - **0.0.2-dev**: ReLink-R's own look, night violet and gold with round corners, around a sword: a new icon and logo; the
   launcher, its install and build pages in the new colours, with the sword standing in its stone pedestal behind them; the
   shader screen at the first start draws the sword out of the pedestal as the shaders get ready; the in-game menu (Insert or
-  F1) in the same colours. Nothing the launcher, the builder or the menu does has changed.
+  F1) in the same colours. Nothing the launcher, the builder or the menu does has changed. ReLink-R stands apart from
+  Project ReLink: its own folder (%LOCALAPPDATA%\ReLink-R), default game folder (Games\ReLink-R), shortcuts (ReLink-R),
+  window and downloads (ReLinkR-Setup.exe, ReLinkR-<version>-Windows-x64.zip); it updates only from this repository. A
+  ReLink-R game folder that an earlier ReLink-R launcher remembered (v0.0.x) is taken over at the first start.
 - **0.0.1-test** (on top of upstream 0.7.9.2): fast sync no longer keeps skipping a memory page it once learned to be unchanged by the GPU's write-back
   (checked again every 240 skips, forgotten when the game frees it): the suspected cause of ground textures breaking after
   15-30 min and of texture flicker on NVIDIA (upstream issues 141, 142, 143, 162, 168). `RX_VK_LATE_RECHECK=0` turns it off.

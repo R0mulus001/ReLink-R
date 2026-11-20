@@ -406,7 +406,7 @@ bool ngx_init() {
 #ifdef _WIN32
     if (fs::path e = env_path(L"RX_VK_DLSS_DIR"); !e.empty()) dirs.push_back(e);
     dirs.push_back(game_dir() / L"ngx");
-    if (fs::path l = env_path(L"LOCALAPPDATA"); !l.empty()) dirs.push_back(l / L"ReLink" / L"ngx");
+    if (fs::path l = env_path(L"LOCALAPPDATA"); !l.empty()) dirs.push_back(l / L"ReLink-R" / L"ngx");
 #else
     if (fs::path e = env_path("RX_VK_DLSS_DIR"); !e.empty()) dirs.push_back(e);
     dirs.push_back(game_dir() / "ngx");

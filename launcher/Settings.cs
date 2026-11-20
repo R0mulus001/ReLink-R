@@ -138,6 +138,14 @@ sealed class Settings
     {
         var s = new Settings();
         var l = ReadIni(LauncherIni);
+        // (ReLink-R, once: its first launchers lived in Project ReLink's own folder, %LOCALAPPDATA%\ReLink. Their choices are taken
+        // over only when the game folder they name was built by ReLink-R (its versions are v0.0.x); a Project ReLink install is left alone)
+        if (l.Count == 0)
+        {
+            var old = ReadIni(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReLink", "launcher.ini"));
+            if (old.TryGetValue("game_folder", out var of) && Version(of) is { } ov && ov.StartsWith("v0.0.", StringComparison.Ordinal))
+                l = old;
+        }
         // (an earlier launcher kept the same three choices in lanceur.ini beside the game: taken once, while this one has none yet)
         if (l.Count == 0)
             foreach (var beside in new[] { folder, AppContext.BaseDirectory })
@@ -161,7 +169,7 @@ sealed class Settings
         return s;
     }
 
-    public static string DefaultFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ReLink");
+    public static string DefaultFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ReLink-R");
 
     /// The game's own file and language, read again (the in-game menu may have changed them)
     public void LoadGame()

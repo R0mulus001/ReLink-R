@@ -450,7 +450,7 @@ static DWORD WINAPI work(LPVOID unused) {
     }
     wchar_t base[MAX_PATH], downloads[MAX_PATH];
     if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base) != S_OK) fail(L"No local application data folder.");
-    wcscat(base, L"\\ReLink");
+    wcscat(base, L"\\ReLink-R");   /* (ReLink-R: its own folder, apart from Project ReLink's) */
     {   /* (RELINK_SETUP_BASE=<folder>: install there instead, for testing installs and updates without touching the real one) */
         const wchar_t *tb = _wgetenv(L"RELINK_SETUP_BASE");
         if (tb && *tb) wcsncpy(base, tb, MAX_PATH - 1), base[MAX_PATH - 1] = 0;
@@ -659,12 +659,12 @@ static int launch_installed(const wchar_t *args) {
     wchar_t base[MAX_PATH], cur[MAX_PATH], exe[MAX_PATH], dir[MAX_PATH], cmd[4096];
     if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base) != S_OK) return 0;
     char tag[128] = "";
-    swprintf(cur, MAX_PATH, L"%ls\\ReLink\\versions\\current.txt", base);
+    swprintf(cur, MAX_PATH, L"%ls\\ReLink-R\\versions\\current.txt", base);
     read_small(cur, tag, sizeof tag);
     if (!tag[0]) return 0;
     wchar_t wtag[128];
     MultiByteToWideChar(CP_UTF8, 0, tag, -1, wtag, 128);
-    swprintf(dir, MAX_PATH, L"%ls\\ReLink\\versions\\%ls\\ReLink", base, wtag);
+    swprintf(dir, MAX_PATH, L"%ls\\ReLink-R\\versions\\%ls\\ReLink", base, wtag);
     swprintf(exe, MAX_PATH, L"%ls\\ReLink.exe", dir);
     if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return 0;
     swprintf(cmd, 4096, L"\"%ls\" %ls", exe, args);
@@ -700,7 +700,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
                     CloseHandle(pi.hThread), CloseHandle(pi.hProcess);
                     return 0;
                 }
-                MessageBoxW(NULL, L"The game in this folder could not be started. Install it again with ReLink-Setup.exe.", L"Project ReLink",
+                MessageBoxW(NULL, L"The game in this folder could not be started. Install it again with ReLink-Setup.exe.", L"ReLink-R",
                             MB_ICONERROR);
                 return 1;
             }

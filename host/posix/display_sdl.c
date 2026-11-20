@@ -13,7 +13,7 @@
 #include "../hos_sdl.h"
 
 /* (the window's app id: the applications menu's entry names it as its StartupWMClass, builder/linux/relink_builder.py) */
-#define HOS_APP_ID "io.github.pixl27.ProjectReLink"
+#define HOS_APP_ID "io.github.R0mulus001.ReLinkR"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

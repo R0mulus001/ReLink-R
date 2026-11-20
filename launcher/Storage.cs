@@ -11,7 +11,7 @@ namespace ReLink;
 /// of the game files is what updates build from.
 static class Storage
 {
-    public static string Base => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReLink");
+    public static string Base => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ReLink-R");   // (ReLink-R: apart from Project ReLink's
 
     /// About what a build leaves in the build files folder (the translated code and its compiled objects): said before the build
     public const long BuildFilesBytes = 4L << 30;

@@ -1280,7 +1280,7 @@ def parse_args():
     p.add_argument("--out")
     p.add_argument("--work", default=os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
                                                   "relink-builder-windows" if CROSS else "relink-builder")   # (the objects apart)
-                   if os.name != "nt" else os.path.join(os.environ.get("LOCALAPPDATA", ROOT), "ReLink"))
+                   if os.name != "nt" else os.path.join(os.environ.get("LOCALAPPDATA", ROOT), "ReLink-R"))
     # (RELINK_JOBS: fewer compilers on a PC short of memory; the AppImage's builds pass no --jobs)
     p.add_argument("--jobs", type=int)
     p.add_argument("--language", default="en-US", help="the game's language: a code from LANGUAGES, written to language.txt")

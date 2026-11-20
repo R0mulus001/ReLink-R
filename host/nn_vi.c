@@ -153,7 +153,7 @@ static int display_hz(void) {
     static HWND window;
     static HMONITOR monitor;
     if (hz && ++calls % 120) return hz;
-    if (!window) window = FindWindowA("ProjectReLink", NULL);   /* (host/display.c's window class) */
+    if (!window) window = FindWindowA("ReLinkR", NULL);   /* (host/display.c's window class) */
     HMONITOR m = window ? MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY) : NULL;
     if (hz && m == monitor) return hz;
     monitor = m;

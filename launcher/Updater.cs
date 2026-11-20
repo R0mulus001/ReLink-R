@@ -14,7 +14,7 @@ namespace ReLink;
 static class Updater
 {
     const string Latest = "https://api.github.com/repos/" + Repo + "/releases/latest";
-    const string SetupAsset = "ReLink-Setup.exe";
+    const string SetupAsset = "ReLinkR-Setup.exe";   // (ReLink-R: the release's name for it; the copy beside the app keeps ReLink-Setup.exe)
     const string SetupList = "relink-setup.txt";
     static readonly TimeSpan[] RetryDelays = { TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(6), TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(20) };
 
