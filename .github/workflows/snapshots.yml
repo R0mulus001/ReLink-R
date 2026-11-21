@@ -44,3 +44,17 @@ jobs:
         with:
           name: snapshots
           path: snap
+      # (also in the log, as base64 between markers: a log is read where an artifact's storage host cannot be)
+      - name: Pictures in the log
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          foreach ($f in Get-ChildItem snap) {
+            $path = $f.FullName
+            if ($f.Extension -eq '.bmp') { $png = [IO.Path]::ChangeExtension($path, '.png'); ([Drawing.Image]::FromFile($path)).Save($png, [Drawing.Imaging.ImageFormat]::Png); $path = $png }
+            elseif ($f.Extension -ne '.png') { continue }
+            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+            Write-Output "=====BEGIN $([IO.Path]::GetFileName($path))"
+            for ($i = 0; $i -lt $b.Length; $i += 4000) { Write-Output $b.Substring($i, [Math]::Min(4000, $b.Length - $i)) }
+            Write-Output "=====END"
+          }
