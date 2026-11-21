@@ -1353,22 +1353,19 @@ void triangle(HDC dc, int cx, int cy, int size, int dir, COLORREF c) {
 }
 } // namespace cart
 
-/// (relink) The menu's pages other than the options in the same cartridge: the shell, its grooves and the cream label over
-/// the whole bitmap (round corners see-through: menu_bmp is keyed), and the page's title on a strip of its colour at the
-/// label's top left. The pages keep their own layout under it (vk_menu_hit.h): the strip stays above 38 * s
+/// (relink) The menu's pages other than the options in the same cartridge: the shell and the label over the whole bitmap
+/// (round corners see-through: menu_bmp is keyed), and the page's title at the label's top left (ReLink-R 0.0.3: on the label,
+/// no strip and no grooves). The pages keep their own layout under it (vk_menu_hit.h): the strip stays above 38 * s
 void cart_page(HDC dc, int w, int h, int s, const char* title, COLORREF strip, COLORREF on) {
     using namespace cart;
     startup_gdi::fill(dc, 0, 0, w, h, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, w, h, 10 * s, kShell);
-    for (int x = 40 * s; x + 3 * s < w - 40 * s; x += 9 * s) startup_gdi::fill(dc, x, 2 * s, 2 * s, 3 * s, kGroove);
     startup_gdi::round_rect(dc, 5 * s, 7 * s, w - 10 * s, h - 12 * s, 7 * s, kLabel);
     HFONT f = face(17.0f * (float)s, 3);
     HGDIOBJ old = SelectObject(dc, f);
-    const int tw = text_w(dc, title) + 28 * s;
-    startup_gdi::round_rect(dc, 5 * s, 7 * s, tw, 31 * s + 7 * s, 7 * s, strip);
-    startup_gdi::fill(dc, 5 * s, 38 * s, tw, 7 * s, kLabel);   // (the strip's round bottom hidden: square on the label)
+    (void)strip, (void)on;   // (ReLink-R 0.0.3: the title on the label itself, as the drafts have it; no strip of colour)
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, on);
+    SetTextColor(dc, kInk);
     TextOutA(dc, 5 * s + 14 * s, 7 * s + (31 * s - text_h(dc)) / 2, title, (int)strlen(title));
     SelectObject(dc, old);
     DeleteObject(f);
@@ -1752,26 +1749,43 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     const int W = (int)w, H = (int)h;
     const TabLook& look = kTabs[cur_tab];
     SetBkMode(dc, TRANSPARENT);
-    // the shell, its grooves and the label (the corners outside it black: see-through, menu_bmp is keyed)
+    // the shell and the label (the corners outside it black: see-through, menu_bmp is keyed)
     startup_gdi::fill(dc, 0, 0, W, H, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, W, H, P(14), kShell);
-    for (int x = P(40); x + P(3) < W - P(40); x += P(9)) startup_gdi::fill(dc, x, P(8), P(3), P(6), kGroove);
     const int lx = P(10), lw = W - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12);
     startup_gdi::round_rect(dc, lx, ly, lw, lh, P(9), kLabel);
-    // the tabs: strips across the label's top, the shown one taller
+    // (ReLink-R 0.0.3, the drafts) the name in the shell's band over the label, the logo's sword beside it
+    if (paint_bits) {
+        GdiFlush();   // (what GDI has drawn first: the sword's pixels go over it)
+        const auto UX = [u](float v) { return v * u; };
+        startup_art::sword(paint_bits, W, H, UX, UX, u, 20, 3.5f, 0.105f, false);
+    }
+    {
+        HFONT nf = face(12.5f * u, 3);
+        HGDIOBJ was = SelectObject(dc, nf);
+        SetTextAlign(dc, TA_LEFT | TA_BASELINE);
+        SetTextColor(dc, kInk);
+        TextOutA(dc, P(30), P(16), "ReLink", 6);
+        SetTextColor(dc, kYellow);
+        TextOutA(dc, P(30) + text_w(dc, "ReLink"), P(16), "-R", 2);
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
+        SelectObject(dc, was), DeleteObject(nf);
+    }
+    // the tabs (ReLink-R 0.0.3, the drafts): rounded pills on the label, the shown one on the panel's violet with gold words;
+    // each keeps the place and width it had as a strip (the shown one wider), so what a click finds is unchanged
     static const char* const titles[TAB_COUNT] = {"Graphics", "Gameplay", "Controls"};
     const float units = 1.3f + (TAB_COUNT - 1);
     int x = lx;
     for (int t = 0; t < TAB_COUNT; t++) {
         const bool on = t == cur_tab;
         const int tw = (int)std::lround((float)(lw - P(3) * (TAB_COUNT - 1)) * (on ? 1.3f : 1.0f) / units);
-        const int top = ly + (on ? 0 : P(7)), right = t == TAB_COUNT - 1 ? lx + lw : x + tw;
-        const COLORREF c = on ? kTabs[t].strip : mix(kTabs[t].strip, kLabel, hover_tab == t ? 0.25f : 0.5f);
-        startup_gdi::round_rect(dc, x, top, right - x, ly + P(kOptTabH) - top + P(9), P(9), c);   // (its bottom hidden below)
-        HFONT f = face(on ? 17 * u : 14 * u, on ? 3 : 1);
+        const int right = t == TAB_COUNT - 1 ? lx + lw : x + tw;
+        const int pt = ly + P(5), ph = P(kOptTabH) - P(8);
+        if (on || hover_tab == t) startup_gdi::round_rect(dc, x + P(4), pt, right - x - P(8), ph, P(10), on ? RGB(0x26, 0x22, 0x52) : mix(kLabel, RGB(0x26, 0x22, 0x52), 0.5f));
+        HFONT f = face(15 * u, 1);
         HGDIOBJ old = SelectObject(dc, f);
-        SetTextColor(dc, on ? kTabs[t].on : mix(kTabs[t].on, c, 0.15f));
-        TextOutA(dc, x + P(14), top + (ly + P(kOptTabH) - top - text_h(dc)) / 2, titles[t], (int)strlen(titles[t]));
+        SetTextColor(dc, on ? kYellow : hover_tab == t ? kInk : kSoft);
+        TextOutA(dc, x + (right - x - text_w(dc, titles[t])) / 2, pt + (ph - text_h(dc)) / 2, titles[t], (int)strlen(titles[t]));
         SelectObject(dc, old), DeleteObject(f);
         opt_hit.tab_l[t] = x, opt_hit.tab_r[t] = right;
         x = right + P(3);
@@ -2058,7 +2072,6 @@ void paint_cheats(HDC dc, uint32_t w, uint32_t h) {
     SetBkMode(dc, TRANSPARENT);
     startup_gdi::fill(dc, 0, 0, W, H, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, W, H, P(14), kShell);
-    for (int x = P(40); x + P(3) < W - P(40); x += P(9)) startup_gdi::fill(dc, x, P(8), P(3), P(6), kGroove);
     const int lx = P(10), lw = W - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12);
     startup_gdi::round_rect(dc, lx, ly, lw, lh, P(9), kLabel);
     // the strip: the page's name, and where it came from
@@ -2245,7 +2258,6 @@ void paint_list(HDC dc, uint32_t w, uint32_t h, bool inv) {
     SetBkMode(dc, TRANSPARENT);
     startup_gdi::fill(dc, 0, 0, W, H, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, W, H, P(14), kShell);
-    for (int x = P(40); x + P(3) < W - P(40); x += P(9)) startup_gdi::fill(dc, x, P(8), P(3), P(6), kGroove);
     const int lx = P(10), lw = W - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12);
     startup_gdi::round_rect(dc, lx, ly, lw, lh, P(9), kLabel);
     // the strip, the way here, and how far down the list is
@@ -2454,7 +2466,6 @@ void paint_travel_cart(HDC dc, uint32_t w, uint32_t h) {
     SetBkMode(dc, TRANSPARENT);
     startup_gdi::fill(dc, 0, 0, W, H, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, W, H, P(14), kShell);
-    for (int x = P(40); x + P(3) < W - P(40); x += P(9)) startup_gdi::fill(dc, x, P(8), P(3), P(6), kGroove);
     const int lx = P(10), lw = W - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12);
     startup_gdi::round_rect(dc, lx, ly, lw, lh, P(9), kLabel);
     // the strip, the way here, the ages, how many places and pictures
@@ -2687,7 +2698,6 @@ void paint_controls_cart(HDC dc, uint32_t w, uint32_t h) {
     SetBkMode(dc, TRANSPARENT);
     startup_gdi::fill(dc, 0, 0, W, H, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, W, H, P(14), kShell);
-    for (int x = P(40); x + P(3) < W - P(40); x += P(9)) startup_gdi::fill(dc, x, P(8), P(3), P(6), kGroove);
     const int lx = P(10), lw = W - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12);
     startup_gdi::round_rect(dc, lx, ly, lw, lh, P(9), kLabel);
     HFONT strip_f = face(17 * u, 3), small = face(12.5f * u, 1), name_f = face(15 * u, 0), name_b = face(15 * u, 2),

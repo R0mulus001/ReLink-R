@@ -52,6 +52,48 @@
     <!-- (the staff over the sky: light) -->
     <SolidColorBrush x:Key="StaffBone" Color="#F6E3A6"/>
     <SolidColorBrush x:Key="StaffFaint" Color="#B3ADD6"/>
+    <!-- (ReLink-R 0.0.3) The sword, as the logo draws it (assets/relink.png, the icon): its blade, guard, grip and pommel each a
+         little under the next, so no seam of the background shows between them at any size -->
+    <DrawingImage x:Key="SwordMark">
+      <DrawingImage.Drawing>
+        <DrawingGroup>
+          <GeometryDrawing Brush="Transparent"><GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,80,260"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#C9D3EE" Geometry="M40,4 L49,26 L49,173 L31,173 L31,26 Z"/>
+          <GeometryDrawing Brush="#EEF2FF" Geometry="M40,4 L49,26 L49,173 L40,173 Z"/>
+          <GeometryDrawing Brush="#8C98C6"><GeometryDrawing.Geometry><RectangleGeometry Rect="38.75,30,2.5,130" RadiusX="1.25" RadiusY="1.25"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#6A5AE6"><GeometryDrawing.Geometry><RectangleGeometry Rect="34,178,12,54" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Geometry><RectangleGeometry Rect="34,192,12,3"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Geometry><RectangleGeometry Rect="34,204,12,3"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Geometry><RectangleGeometry Rect="34,216,12,3"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#E2BE5A"><GeometryDrawing.Geometry><RectangleGeometry Rect="10,170,60,12" RadiusX="6" RadiusY="6"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#E2BE5A"><GeometryDrawing.Geometry><EllipseGeometry Center="11,176" RadiusX="7" RadiusY="7"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#E2BE5A"><GeometryDrawing.Geometry><EllipseGeometry Center="69,176" RadiusX="7" RadiusY="7"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Pen><Pen Brush="#F6E3A6" Thickness="2.5"/></GeometryDrawing.Pen><GeometryDrawing.Geometry><EllipseGeometry Center="40,176" RadiusX="8" RadiusY="8"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#E2BE5A"><GeometryDrawing.Geometry><EllipseGeometry Center="40,239" RadiusX="11" RadiusY="11"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#6A5AE6"><GeometryDrawing.Geometry><EllipseGeometry Center="40,239" RadiusX="4.5" RadiusY="4.5"/></GeometryDrawing.Geometry></GeometryDrawing>
+        </DrawingGroup>
+      </DrawingImage.Drawing>
+    </DrawingImage>
+    <!-- (ReLink-R 0.0.3) The sword's hilt lying down, at the left of the install's bar: the bar is its blade and runs on from under
+         the guard (pommel, grip and wraps, guard; 76 x 60) -->
+    <DrawingImage x:Key="HiltMark">
+      <DrawingImage.Drawing>
+        <DrawingGroup>
+          <GeometryDrawing Brush="Transparent"><GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,76,60"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#6A5AE6"><GeometryDrawing.Geometry><RectangleGeometry Rect="17,25,52,10" RadiusX="3" RadiusY="3"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Geometry><RectangleGeometry Rect="31,25,2.5,10"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Geometry><RectangleGeometry Rect="43,25,2.5,10"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#4B3CC4"><GeometryDrawing.Geometry><RectangleGeometry Rect="55,25,2.5,10"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#E2BE5A"><GeometryDrawing.Geometry><EllipseGeometry Center="13,30" RadiusX="9" RadiusY="9"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#6A5AE6"><GeometryDrawing.Geometry><EllipseGeometry Center="13,30" RadiusX="3.5" RadiusY="3.5"/></GeometryDrawing.Geometry></GeometryDrawing>
+          <GeometryDrawing Brush="#E2BE5A"><GeometryDrawing.Geometry><RectangleGeometry Rect="63,6,13,48" RadiusX="6.5" RadiusY="6.5"/></GeometryDrawing.Geometry></GeometryDrawing>
+        </DrawingGroup>
+      </DrawingImage.Drawing>
+    </DrawingImage>
+    <LinearGradientBrush x:Key="GoldBlade" StartPoint="0,0" EndPoint="1,0">
+      <GradientStop Color="#E2BE5A" Offset="0"/>
+      <GradientStop Color="#F6E3A6" Offset="1"/>
+    </LinearGradientBrush>
     <FontFamily x:Key="Display">pack://application:,,,/fonts/#Rubik</FontFamily>
     <FontFamily x:Key="Text">pack://application:,,,/fonts/#Rubik</FontFamily>
     <FontFamily x:Key="Mono">Cascadia Mono, Consolas</FontFamily>
@@ -62,12 +104,14 @@
     <Style x:Key="ViewTitle" TargetType="TextBlock">
       <Setter Property="FontFamily" Value="{StaticResource Display}"/>
       <Setter Property="FontWeight" Value="ExtraBold"/>
-      <Setter Property="FontSize" Value="18"/>
-      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="FontSize" Value="24"/>
+      <Setter Property="Foreground" Value="{StaticResource Bone}"/>
     </Style>
+    <!-- (ReLink-R 0.0.3: the title stands on the label itself, no strip of colour under it) -->
     <Style x:Key="Strip" TargetType="Border">
-      <Setter Property="CornerRadius" Value="8"/>
-      <Setter Property="Padding" Value="16,7,18,8"/>
+      <Setter Property="CornerRadius" Value="0"/>
+      <Setter Property="Padding" Value="2,0,0,0"/>
+      <Setter Property="Background" Value="Transparent"/>
       <Setter Property="HorizontalAlignment" Value="Left"/>
     </Style>
     <Style x:Key="Body" TargetType="TextBlock">
@@ -119,31 +163,29 @@
       </Setter>
     </Style>
 
-    <!-- The pages of the options: strips of their colours across the label's top, the open one taller -->
+    <!-- The pages of the options (ReLink-R 0.0.3): rounded pills on the label, the open one on the panel's violet with gold words.
+         (Background, a page's own colour, is no longer drawn: the gold says which page is open on every one) -->
     <Style x:Key="Tab" TargetType="RadioButton">
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Foreground" Value="White"/>
       <Setter Property="FontFamily" Value="{StaticResource Text}"/>
       <Setter Property="FontWeight" Value="Medium"/>
-      <Setter Property="FontSize" Value="14"/>
-      <Setter Property="Margin" Value="0,0,3,0"/>
+      <Setter Property="FontSize" Value="15"/>
+      <Setter Property="Margin" Value="0,0,6,0"/>
       <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="strip" Background="{TemplateBinding Background}" CornerRadius="8,8,0,0" Margin="0,8,0,0" Opacity="0.5" Height="34" VerticalAlignment="Bottom">
-              <ContentPresenter Margin="14,0,0,0" VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
+            <Border x:Name="pill" Background="Transparent" CornerRadius="10" Height="38" Padding="18,0" VerticalAlignment="Center">
+              <ContentPresenter x:Name="words" HorizontalAlignment="Center" VerticalAlignment="Center" TextElement.Foreground="{StaticResource BoneSoft}"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="strip" Property="Opacity" Value="0.75"/>
+                <Setter TargetName="pill" Property="Background" Value="#14FFFFFF"/>
+                <Setter TargetName="words" Property="TextElement.Foreground" Value="{StaticResource Bone}"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="strip" Property="Opacity" Value="1"/>
-                <Setter TargetName="strip" Property="Margin" Value="0"/>
-                <Setter TargetName="strip" Property="Height" Value="42"/>
-                <Setter Property="FontWeight" Value="ExtraBold"/>
-                <Setter Property="FontSize" Value="17"/>
+                <Setter TargetName="pill" Property="Background" Value="{StaticResource SideHover}"/>
+                <Setter TargetName="words" Property="TextElement.Foreground" Value="{StaticResource Gold}"/>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
@@ -165,7 +207,7 @@
           <ControlTemplate TargetType="RadioButton">
             <Border x:Name="b" Background="Transparent" CornerRadius="8" Padding="0,9,10,9">
               <DockPanel>
-                <Rectangle x:Name="bar" Width="3" Height="18" RadiusX="1.5" RadiusY="1.5" Fill="{TemplateBinding BorderBrush}" Opacity="0.55" Margin="0,0,10,0"/>
+                <Rectangle x:Name="bar" Width="0" Height="18" Margin="0,0,14,0"/>
                 <TextBlock Text="{TemplateBinding Tag}" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="16" FontWeight="Normal"
                            Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center" Width="20" Margin="0,0,9,0"/>
                 <ContentPresenter VerticalAlignment="Center" TextElement.Foreground="{TemplateBinding Foreground}"/>
@@ -177,9 +219,8 @@
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
                 <Setter TargetName="b" Property="Background" Value="{StaticResource SideHover}"/>
-                <Setter TargetName="bar" Property="Opacity" Value="1"/>
-                <Setter Property="Foreground" Value="{StaticResource SideText}"/>
-                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Foreground" Value="{StaticResource Gold}"/>
+                <Setter Property="FontWeight" Value="Medium"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.45"/>
@@ -190,29 +231,29 @@
       </Setter>
     </Style>
 
-    <!-- One choice among several: a pill of the page's colour for the chosen one, plain words for the others -->
+    <!-- One choice among several (ReLink-R 0.0.3): rounded chips with a thin violet edge; the chosen one gold-edged, its words gold -->
     <Style x:Key="Choice" TargetType="RadioButton">
       <Setter Property="Cursor" Value="Hand"/>
       <Setter Property="Foreground" Value="{StaticResource BoneSoft}"/>
       <Setter Property="FontFamily" Value="{StaticResource Text}"/>
       <Setter Property="FontSize" Value="13.5"/>
-      <Setter Property="Margin" Value="0,0,4,4"/>
+      <Setter Property="Margin" Value="0,0,6,6"/>
       <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="RadioButton">
-            <Border x:Name="pill" Background="Transparent" CornerRadius="11" Padding="10,3,10,4">
+            <Border x:Name="pill" Background="Transparent" BorderBrush="{StaticResource Rule}" BorderThickness="1" CornerRadius="10" Padding="11,4,11,5">
               <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}"/>
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="pill" Property="Background" Value="#18FFFFFF"/>
+                <Setter TargetName="pill" Property="Background" Value="#14FFFFFF"/>
                 <Setter Property="Foreground" Value="{StaticResource Bone}"/>
               </Trigger>
               <Trigger Property="IsChecked" Value="True">
-                <Setter TargetName="pill" Property="Background" Value="{DynamicResource Accent}"/>
-                <Setter Property="Foreground" Value="{DynamicResource AccentOn}"/>
-                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter TargetName="pill" Property="Background" Value="#3A3166"/>
+                <Setter TargetName="pill" Property="BorderBrush" Value="{StaticResource Gold}"/>
+                <Setter Property="Foreground" Value="{StaticResource Gold}"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.4"/>

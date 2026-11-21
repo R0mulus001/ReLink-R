@@ -78,8 +78,12 @@ static class Scene
             var size = 1 + rnd.NextDouble() * 1.6;
             var gold = rnd.NextDouble() < 0.22;
             var star = new Ellipse { Width = size, Height = size, Fill = new SolidColorBrush(gold ? C("F6E3A6") : C("DCD6FF")), Opacity = 0.3 + rnd.NextDouble() * 0.6 };
-            Canvas.SetLeft(star, rnd.NextDouble() * w);
-            Canvas.SetTop(star, 6 + rnd.NextDouble() * 260);
+            var (sx, sy) = (rnd.NextDouble() * w, 6 + rnd.NextDouble() * 260);
+            // (ReLink-R 0.0.3: none over the words, the title at the top left and the staff under it: they would read as specks
+            // in the letters. The draws stay the same, so the other stars keep their places)
+            if (sx < 470 && (sy < 96 || sy > 166)) star.Visibility = Visibility.Collapsed;
+            Canvas.SetLeft(star, sx);
+            Canvas.SetTop(star, sy);
             canvas.Children.Add(star);
             var twinkle = new System.Windows.Media.Animation.DoubleAnimation(star.Opacity, 0.12, TimeSpan.FromSeconds(1.4 + rnd.NextDouble() * 2.4))
             {
@@ -121,10 +125,12 @@ static class Scene
         var sword = new Canvas { Clip = new RectangleGeometry(new System.Windows.Rect(x - 40, 0, 80, slot)) };
         var t = slot - 120;   // (the pommel's top: half the blade out)
         void Part(string d, string hex) => sword.Children.Add(new Path { Data = Geometry.Parse(d), Fill = new SolidColorBrush(C(hex)) });
-        Part($"M{x - 6},{t + 44} L{x + 6},{t + 44} L{x + 6},{t + 154} L{x},{t + 168} L{x - 6},{t + 154} Z", "C9D3EE");
-        Part($"M{x},{t + 44} L{x + 6},{t + 44} L{x + 6},{t + 154} L{x},{t + 168} Z", "EEF2FF");
+        // (ReLink-R 0.0.3: each part starts a little under the one before, so no hairline of the sky shows between the blade,
+        // the guard, the grip and the pommel: the blade from under the guard, the grip from under the pommel to under the guard)
+        Part($"M{x - 6},{t + 41} L{x + 6},{t + 41} L{x + 6},{t + 154} L{x},{t + 168} L{x - 6},{t + 154} Z", "C9D3EE");
+        Part($"M{x},{t + 41} L{x + 6},{t + 41} L{x + 6},{t + 154} L{x},{t + 168} Z", "EEF2FF");
         Part($"M{x - 0.6},{t + 48} L{x + 0.6},{t + 48} L{x + 0.6},{t + 146} L{x - 0.6},{t + 146} Z", "8C98C6");
-        Part($"M{x - 3.5},{t + 9} L{x + 3.5},{t + 9} L{x + 3.5},{t + 36} L{x - 3.5},{t + 36} Z", "6A5AE6");
+        Part($"M{x - 3.5},{t + 7} L{x + 3.5},{t + 7} L{x + 3.5},{t + 39} L{x - 3.5},{t + 39} Z", "6A5AE6");
         foreach (var k in new[] { 15.0, 22, 29 }) Part($"M{x - 3.5},{t + k} L{x + 3.5},{t + k} L{x + 3.5},{t + k + 1.6} L{x - 3.5},{t + k + 1.6} Z", "4B3CC4");
         void Dot(double cx, double cy, double r, string hex)
         {
