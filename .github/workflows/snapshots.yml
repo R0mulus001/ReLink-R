@@ -1,0 +1,46 @@
+# Pictures of the launcher's pages (ReLink.exe --snapshot) and of the game's start-up screen (gpu/vk/vk_startup_paint.h drawn
+# by .github/snap/startup_snap.cpp into a bitmap), for looking at a change of the look before it is released. Nothing is run.
+name: Snapshots
+
+on:
+  push:
+    branches: ['ui-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshots:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '9.0.x'
+      - name: Launcher
+        shell: bash
+        run: dotnet build launcher/ReLink.csproj --configuration Debug -p:NuGetAudit=false --output out
+      - name: The launcher's pages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force snap | Out-Null
+          foreach ($v in 'install','build','update','ready','problem','home','home-update','home-mods','home-building','mods','options','smooth','game','controls','playing') {
+            $p = Start-Process -FilePath out/ReLink.exe -ArgumentList '--snapshot',"$PWD\snap\launcher-$v.png",'--view',$v -PassThru
+            if (-not $p.WaitForExit(60000)) { $p.Kill(); Write-Host "$v timed out" }
+          }
+          Get-ChildItem snap
+      - name: The start-up screen
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VS=%%i
+          call "%VS%\VC\Auxiliary\Build\vcvars64.bat"
+          cl /nologo /std:c++20 /EHsc /O2 /DNOMINMAX /Igpu\vk .github\snap\startup_snap.cpp /Fe:startup_snap.exe gdi32.lib user32.lib || exit /b 1
+          startup_snap.exe snap
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: snapshots
+          path: snap
