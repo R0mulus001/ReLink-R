@@ -182,7 +182,7 @@ sealed class Settings
     {
         try
         {
-            var dir = new DirectoryInfo(path.TrimEnd('\', '/'));
+            var dir = new DirectoryInfo(path.TrimEnd('\\', '/'));
             if (!string.Equals(dir.Name, "ReLink", StringComparison.OrdinalIgnoreCase) || dir.Parent is null) return null;
             if (Game.Version(dir.FullName) is not { } v || !v.StartsWith("v0.0.", StringComparison.Ordinal)) return null;
             var target = Path.Combine(dir.Parent.FullName, "ReLink-R");
