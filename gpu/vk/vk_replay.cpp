@@ -3205,6 +3205,14 @@ void log_frame_stats() {
             logf("vk: a frame: %.1f full barriers recorded, %.1f left out (nothing recorded since the one before)", (made - l_made) / 120.0,
                  (left - l_left) / 120.0);
             l_made = made, l_left = left;
+            {   // (ReLink-R 0.0.4, RX_VK_DISPATCH_HAZARDS: a dispatch's wait for the dispatches before it, left out when independent)
+                static int64_t l_sk, l_kp;
+                int64_t sk = 0, kp = 0;
+                dispatch_hazard_stats(&sk, &kp);
+                logf("vk: a frame: dispatch barriers %.1f recorded, %.1f left out (independent of the dispatches since the last barrier)",
+                     (kp - l_kp) / 120.0, (sk - l_sk) / 120.0);
+                l_sk = sk, l_kp = kp;
+            }
             std::string fl;   // (NVN's barrier bits: ORDER_PRIMITIVES 1, ORDER_FRAGMENTS 2, ORDER_FRAGMENTS_TILED 4, ORDER_INDIRECT_DATA 8, INVALIDATE_TEXTURE 0x10, _SHADER 0x20, _TEXTURE_DESCRIPTOR 0x40, _ZCULL 0x80)
             std::lock_guard lk(st_barrier_flags_mu);
             for (const auto& [bits, n] : st_barrier_flags) {

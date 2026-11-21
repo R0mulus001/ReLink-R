@@ -165,8 +165,36 @@ sealed class Settings
             folder, l.TryGetValue("game_folder", out var remembered) ? remembered : null, here, Path.GetDirectoryName(here), DefaultFolder,
         };
         s.Folder = candidates.FirstOrDefault(Game.Installed) ?? "";
+        if (s.Folder != "" && s.Folder != folder && RenameToOwnName(s.Folder) is { } renamed)
+        {
+            s.Folder = renamed;
+            s.Save();
+        }
         if (s.Folder != "") s.LoadGame();
         return s;
+    }
+
+    /// (ReLink-R 0.0.4, once) A game folder named plainly "ReLink", which ReLink-R itself built (its versions are v0.0.x),
+    /// renamed "ReLink-R" beside it, so it cannot be taken for Project ReLink's. Only when nothing is in the way: no "ReLink-R"
+    /// there already, the game not running from it. A rename on the same drive moves nothing, so it is instant; if Windows
+    /// refuses (a file open in it, say), the folder stays as it is and the launcher goes on with it. The new path, or null
+    static string? RenameToOwnName(string path)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(path.TrimEnd('\', '/'));
+            if (!string.Equals(dir.Name, "ReLink", StringComparison.OrdinalIgnoreCase) || dir.Parent is null) return null;
+            if (Game.Version(dir.FullName) is not { } v || !v.StartsWith("v0.0.", StringComparison.Ordinal)) return null;
+            var target = Path.Combine(dir.Parent.FullName, "ReLink-R");
+            if (Directory.Exists(target) || File.Exists(target)) return null;
+            if (System.Diagnostics.Process.GetProcessesByName("relink-game").Length > 0) return null;
+            Directory.Move(dir.FullName, target);
+            return Game.Installed(target) ? target : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     public static string DefaultFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ReLink-R");

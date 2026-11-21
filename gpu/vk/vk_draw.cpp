@@ -2625,6 +2625,42 @@ thread_local std::vector<PeekBind> peek_binds;   // (build_descriptors fills it 
 struct SkySums { VkBuffer buffer = VK_NULL_HANDLE; VkDeviceSize offset = 0, size = 0; };
 thread_local SkySums sky_sums;
 thread_local SkySums meter_out;   // (relink, RX_VK_METER_ZERO: where an exposure program's sums were bound)
+// (ReLink-R 0.0.4, RX_VK_DISPATCH_HAZARDS, default 1, 0: off) A dispatch after other dispatches waited for all of them (a full
+// barrier: ~160 a frame in Castle Town, each a few microseconds of an idle GPU, more on a laptop's GPU held to low clocks). It now
+// waits only when it has to: when nothing but dispatches was recorded since the last barrier, on the same command buffer, and no
+// buffer range it binds overlaps one an earlier dispatch since that barrier wrote (nor does any range it writes overlap one they
+// read). Every case it cannot see into keeps the barrier: storage images, texel buffers, global memory reached outside its bindings,
+// an indirect grid, any other command recorded in between (a copy, an update, a query), a parallel replay.
+struct HzRange {
+    VkBuffer buf;
+    VkDeviceSize begin, end;
+    bool written;
+};
+thread_local std::vector<HzRange> hz_build;        // (the program build_descriptors bound last: its buffer ranges)
+thread_local bool hz_build_unknown = true;         // (it reaches memory the ranges do not show)
+thread_local std::vector<HzRange> hz_since;        // (the dispatches since the last barrier: their ranges)
+thread_local bool hz_since_ok = false;             // (all of them known, nothing else recorded since)
+thread_local uint64_t hz_epoch_after = 0;          // (thread_work right after the last of them)
+thread_local VkCommandBuffer hz_cmd = VK_NULL_HANDLE;
+std::atomic<int64_t> st_hz_skipped{0}, st_hz_kept{0};
+bool dispatch_hazards_on() {
+    static const bool on = !getenv("RX_VK_DISPATCH_HAZARDS") || atoi(getenv("RX_VK_DISPATCH_HAZARDS")) != 0;
+    return on;
+}
+void hz_note(const VkDescriptorBufferInfo& bi, bool written) {
+    if (bi.buffer == VK_NULL_HANDLE) return;
+    const VkDeviceSize end = bi.range == VK_WHOLE_SIZE ? ~VkDeviceSize(0) : bi.offset + bi.range;
+    hz_build.push_back({bi.buffer, bi.offset, end, written});
+}
+/// The program just bound may run without waiting for the dispatches since the last barrier
+bool hz_independent() {
+    if (hz_build_unknown || !hz_since_ok || hz_since.size() > 256) return false;
+    for (const HzRange& c : hz_build)
+        for (const HzRange& a : hz_since)
+            if (c.buf == a.buf && c.begin < a.end && a.begin < c.end && (c.written || a.written)) return false;
+    return true;
+}
+
 constexpr uint64_t kSkySumsProgram = 0x499dbfd0721d2858ull, kSkyRgblProgram = 0xab7699ee7f536755ull;
 bool peek_prog(uint64_t key) {   // (RX_VK_PEEK_PROG=<key prefix>,... or *; RX_VK_PEEK_FRAME=<n>: that frame only)
     static const char* want = getenv("RX_VK_PEEK_PROG");
@@ -2697,6 +2733,16 @@ void build_descriptors(const NvnState& s, const Program& p) {
     if (p.key == kSkySumsProgram || p.key == kSkyRgblProgram) sky_sums = {};   // (relink: bound again below)
     if (p.key == 0x435a0138b9013040ull || p.key == 0x592079442d7129daull) meter_out = {};
     dw().reset();
+    hz_build.clear();
+    // (the exposure meter's and the sky light's programs have a buffer cleared right before them, after the barrier's place)
+    hz_build_unknown = p.stages.size() != 1 || p.key == kSkySumsProgram || p.key == kSkyRgblProgram || p.key == 0x6ccba775ea111ee9ull ||
+                       p.key == 0x435a0138b9013040ull || p.key == 0x592079442d7129daull;
+    for (const Stage& st : p.stages) {   // (ReLink-R 0.0.4, RX_VK_DISPATCH_HAZARDS: what the bindings do not show)
+        const Shader::Info& in = st.info;
+        if (in.uses_global_memory || in.stores_global_memory || in.num_global_tables || !in.image_descriptors.empty() ||
+            !in.image_buffer_descriptors.empty() || !in.texture_buffer_descriptors.empty())
+            hz_build_unknown = true;
+    }
     draw_sampled().clear();
     light_probe_now = LightProbe{};
     dump_written().clear();
@@ -2732,6 +2778,7 @@ void build_descriptors(const NvnState& s, const Program& p) {
                 dw().bufs.push_back(uniform_range(s, st, d.index + k));
                 if (slow_desc_timing()) slow_descriptor(t0, "uniform buffer", d.index + k, dw().bufs.back().range);
             }
+            for (size_t j = first; j < dw().bufs.size(); j++) hz_note(dw().bufs[j], false);
             w.pBufferInfo = &dw().bufs[first];
             dw().writes.push_back(w);
         }
@@ -2983,6 +3030,7 @@ void build_descriptors(const NvnState& s, const Program& p) {
                     if (slow_desc_timing()) slow_descriptor(t1, "stamp", base, n);
                 }
             }
+            for (size_t j = first; j < dw().bufs.size(); j++) hz_note(dw().bufs[j], d.is_written);
             w.pBufferInfo = &dw().bufs[first];
             dw().writes.push_back(w);
         }
@@ -3156,6 +3204,11 @@ struct Pushed {
 };
 TLS_OBJECT(pushed, std::array<Pushed, 2>)   // [graphics, compute]
 } // namespace
+/// (ReLink-R 0.0.4, RX_VK_DISPATCH_HAZARDS) the dispatches' barriers left out (independent of the dispatches since the last one)
+/// and recorded, so far
+void dispatch_hazard_stats(int64_t* skipped, int64_t* kept) {
+    *skipped = st_hz_skipped.load(std::memory_order_relaxed), *kept = st_hz_kept.load(std::memory_order_relaxed);
+}
 void draw_skip_report(double frames) { skip_report_impl(frames), fine_report(frames); }
 void descriptors_disturbed() {
     pushed()[0].cmd = pushed()[1].cmd = VK_NULL_HANDLE;
@@ -8661,7 +8714,20 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
     // (dispatches after other work wait for it: the WebGPU renderer's dispatches were ordered the same way by
     // wgpu's own tracking, and MKW's compute chains read what the one before wrote)
     static const bool no_order = getenv("RX_VK_NO_DISPATCH_ORDER") != nullptr;
-    if (work_since_barrier && !no_order) full_barrier(cmd, "barrier (dispatch)");
+    {
+        const bool may_skip = dispatch_hazards_on() && !par_active.load(std::memory_order_relaxed) && cmd == hz_cmd &&
+                              thread_work == hz_epoch_after && hz_independent();
+        if (work_since_barrier && !no_order && !may_skip) {
+            full_barrier(cmd, "barrier (dispatch)");
+            hz_since.clear(), hz_since_ok = true;
+            st_hz_kept.fetch_add(1, std::memory_order_relaxed);
+        } else if (work_since_barrier && !no_order) {
+            st_hz_skipped.fetch_add(1, std::memory_order_relaxed);   // (independent of the dispatches since the barrier)
+        } else if (!work_since_barrier) {
+            hz_since.clear(), hz_since_ok = true;   // (a barrier, or the command buffer's start, right before)
+        }
+        hz_cmd = VK_NULL_HANDLE;   // (set again right after the dispatch itself is recorded)
+    }
     work_since_barrier = true;
     if (p.key == kSkySumsProgram || p.key == kSkyRgblProgram || p.key == 0x6ccba775ea111ee9ull) replay_saw_exposure = true;
     {   // (relink, RX_VK_METER_ZERO=1) OoT's exposure meter: 435a0138b9013040 and 592079442d7129da add a frame's
@@ -8785,8 +8851,15 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
                 dump_buffer(cmd, args.buffer, args.offset, 12, what);
             }
             vkCmdDispatchIndirect(cmd, args.buffer, args.offset);
+            hz_since_ok = false;   // (RX_VK_DISPATCH_HAZARDS: its grid is read from a buffer: the next one waits)
         } else {
             vkCmdDispatch(cmd, x, y, z);
+            if (!hz_build_unknown && hz_since_ok) {   // (RX_VK_DISPATCH_HAZARDS: this one's ranges join those since the barrier)
+                hz_since.insert(hz_since.end(), hz_build.begin(), hz_build.end());
+                hz_cmd = cmd, hz_epoch_after = thread_work;
+            } else {
+                hz_since_ok = false;
+            }
         }
     }
     wheel_scene_note(cmd, s, p, false);   // (relink: the game's own gameplay upscale, for the item wheel)
