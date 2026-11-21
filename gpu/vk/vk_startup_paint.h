@@ -1,13 +1,15 @@
 // (relink, ReLink-R) The start-up screen's picture (vk_menu.cpp draws it, vk_main.cpp says what is in it): a sword drawn out of a
 // stone pedestal while the shaders are prepared. On a violet night with twinkling stars, the sword stands in the pedestal's slot
 // with only its hilt out; as the start goes on it rises out of the stone, and a gold light grows behind it and pools on the
-// stone. When a long start is over the sword finishes coming out and the light pulses, and the game starts. Under it the
-// number and one line: what is being done and the time left. The night is kept between frames; the stars, the pedestal, the
-// sword and the text are drawn over a copy each frame. Pixels are written straight into the 32-bit bitmap; the text is GDI in
+// stone. When a long start is over the sword finishes coming out and the light pulses, and the game starts. (ReLink-R 0.0.3,
+// the drafts) The logo at the top left; at the bottom left what is being done in spaced gold capitals, the number large with
+// the time left at the right, a gold bar as far as the sword is out, and one line on why the wait. The night and its faint
+// rays are kept between frames; the stars, the pedestal, the sword, the bar and the text are drawn over a copy each frame. Pixels are written straight into the 32-bit bitmap; the text is GDI in
 // the game's own typeface (Rubik, assets/fonts: nx2/fonts_embed.py), or the system's where it is not (host/posix/gdi_posix.c).
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -260,6 +262,33 @@ inline void frame(uint32_t* px, int w, int h, float x, float y, float s, float r
     }
 }
 
+/// The sword, blade down, its pommel's top at (cx, top), k frame units a unit (1: the big one, 150 tall) through X and Y. Each
+/// part starts a little under the one drawn after it (the grip under the pommel and the guard, the blade under the guard), so
+/// no seam of the night shows between them at any size. Rows from hc down are not drawn (the stone's top hides them)
+template <class FX, class FY>
+inline void sword(uint32_t* px, int w, int hc, FX X, FY Y, float m, float cx, float top, float k, bool gem = true) {
+    const Rgb gold = hex(0xE2BE5A), pale = hex(0xF6E3A6);
+    const auto U = [&](float d) { return d * k * m; };
+    const auto x = [&](float d) { return X(cx + d * k); };
+    const auto y = [&](float d) { return Y(top + d * k); };
+    trap(px, w, hc, y(35), y(138), x(-5.5f), x(5.5f), x(-5.5f), x(5.5f), [&](float) { return hex(0xC9D3EE); }, 1);   // (the blade)
+    trap(px, w, hc, y(138), y(150), x(-5.5f), x(5.5f), x(0), x(0), [&](float) { return hex(0xC9D3EE); }, 1);
+    trap(px, w, hc, y(35), y(138), x(0), x(5.5f), x(0), x(5.5f), [&](float) { return hex(0xEEF2FF); }, 1);
+    trap(px, w, hc, y(138), y(150), x(0), x(5.5f), x(0), x(0), [&](float) { return hex(0xEEF2FF); }, 1);
+    if (k * m >= 0.6f) box(px, w, hc, x(-0.5f), y(42), U(1), U(90), hex(0x8C98C6), 1);   // (the fuller, where it can be seen)
+    box(px, w, hc, x(-3), y(6), U(6), U(30), hex(0x6A5AE6), 1);   // (the grip and its wraps)
+    for (int i = 0; i < 3; i++) box(px, w, hc, x(-3), y(13 + 6 * (float)i), U(6), U(1.5f), hex(0x4B3CC4), 1);
+    ellipse(px, w, hc, x(0), y(4), U(5), U(5), 0, gold, 1);   // (the pommel and its stone)
+    ellipse(px, w, hc, x(0), y(4), U(2), U(2), 0, hex(0x6A5AE6), 1);
+    bar(px, w, hc, x(-15), x(15), y(34), U(3), [&](float) { return gold; }, 1);   // (the guard, its ends, its gem)
+    ellipse(px, w, hc, x(-16), y(34), U(3.6f), U(3.6f), 0, gold, 1);
+    ellipse(px, w, hc, x(16), y(34), U(3.6f), U(3.6f), 0, gold, 1);
+    if (gem) {
+        ellipse(px, w, hc, x(0), y(34), U(4.4f), U(4.4f), 0, pale, 1);
+        ellipse(px, w, hc, x(0), y(34), U(3.3f), U(3.3f), 0, hex(0x4B3CC4), 1);
+    }
+}
+
 /// What stays between frames: the violet night of one size, its light a little stronger behind the sword
 struct Backdrop {
     int w = 0, h = 0, dawn_q = -1;
@@ -268,13 +297,22 @@ struct Backdrop {
 inline void paint_backdrop(Backdrop& bd, int w, int h) {
     bd.w = w, bd.h = h;
     bd.px.assign((size_t)w * h, 0);
-    const Rgb inner = hex(0x3B2E92), mid = hex(0x1E1A4A), outer = hex(0x0B0A1C);
+    const Rgb inner = hex(0x3B2E92), mid = hex(0x1E1A4A), outer = hex(0x0B0A1C), ray = hex(0xE2BE5A);
     const float cx = 0.5f * (float)w, cy = 0.36f * (float)h;
+    // (ReLink-R 0.0.3: the rays fan out from behind the sword, at (340, 120) of the 680 x 383 frame paint_startup_view lays out)
+    const float m = std::min((float)w / 680.0f, (float)h / 383.0f), rx = 0.5f * (float)w, ry = ((float)h - 383.0f * m) / 2 + 120 * m;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
             const float dx = ((float)x - cx) / (0.5f * (float)w), dy = ((float)y - cy) / (0.58f * (float)h);
             const float d = std::min(1.0f, std::sqrt(dx * dx + dy * dy) / 1.41f);
             Rgb c = d < 0.55f ? mix(inner, mid, d / 0.55f) : mix(mid, outer, (d - 0.55f) / 0.45f);
+            const float ddx = (float)x - rx, ddy = (float)y - ry, r = std::sqrt(ddx * ddx + ddy * ddy) / (300 * m);
+            if (r < 1) {   // (18 rays, each a soft wedge, fading out with the distance and close to the centre)
+                const float turns = std::atan2(ddy, ddx) / 6.2831853f * 18, f = turns - std::floor(turns);
+                const float wedge = smooth(0.0f, 0.18f, f) * (1 - smooth(0.32f, 0.5f, f));
+                const float k = wedge * smooth(0.06f, 0.25f, r) * (1 - r) * (1 - r) * 0.09f;
+                c = {c.r + ray.r * k, c.g + ray.g * k, c.b + ray.b * k};
+            }
             const float n = ((float)(hash32((uint32_t)(y * 7919 + x)) & 255) / 255.0f - 0.5f);   // (a grain of noise: no bands)
             bd.px[(size_t)y * w + x] = pack({c.r + n, c.g + n, c.b + n});
         }
@@ -339,6 +377,7 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
         for (uint32_t i = 0; i < 70; i++) {
             const uint32_t hsh = hash32(i * 2654435761u + 17);
             const float sx = (float)(hsh % 680), sy = (float)((hsh >> 10) % 220), ph = (float)((hsh >> 20) & 255) / 40.0f;
+            if (sx < 160 && sy < 62) continue;   // (ReLink-R 0.0.3: none over the logo at the top left)
             const float tw = 0.25f + 0.75f * (0.5f + 0.5f * std::sin(t * 1.7f + ph));
             const float rr = (0.6f + (float)((hsh >> 28) & 3) * 0.35f) * m;
             ellipse(bits, W, H, X(sx), Y(sy), rr, rr, 0, (hsh & 3) == 0 ? pale : hex(0xDCD6FF), 0.85f * tw);
@@ -367,23 +406,21 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
         // the sword, blade down, cut at the slot: what is under the stone is not drawn (the rows from the slot down)
         const int HC = std::max(0, std::min(H, (int)Y(slot)));
         const float T = top;
-        ellipse(bits, W, HC, X(sx0), Y(T + 4), 5 * m, 5 * m, 0, gold, 1);   // (the pommel and its stone)
-        ellipse(bits, W, HC, X(sx0), Y(T + 4), 2 * m, 2 * m, 0, hex(0x6A5AE6), 1);
-        box(bits, W, HC, X(sx0 - 3), Y(T + 8), 6 * m, 24 * m, hex(0x6A5AE6), 1);   // (the grip and its wraps)
-        for (int k = 0; k < 3; k++) box(bits, W, HC, X(sx0 - 3), Y(T + 13 + 6 * (float)k), 6 * m, 1.5f * m, hex(0x4B3CC4), 1);
-        trap(bits, W, HC, Y(T + 38), Y(T + 138), X(sx0 - 5.5f), X(sx0 + 5.5f), X(sx0 - 5.5f), X(sx0 + 5.5f), [&](float) { return hex(0xC9D3EE); }, 1);
-        trap(bits, W, HC, Y(T + 138), Y(T + 150), X(sx0 - 5.5f), X(sx0 + 5.5f), X(sx0), X(sx0), [&](float) { return hex(0xC9D3EE); }, 1);
-        trap(bits, W, HC, Y(T + 38), Y(T + 138), X(sx0), X(sx0 + 5.5f), X(sx0), X(sx0 + 5.5f), [&](float) { return hex(0xEEF2FF); }, 1);
-        trap(bits, W, HC, Y(T + 138), Y(T + 150), X(sx0), X(sx0 + 5.5f), X(sx0), X(sx0), [&](float) { return hex(0xEEF2FF); }, 1);
-        box(bits, W, HC, X(sx0 - 0.5f), Y(T + 42), 1 * m, 90 * m, hex(0x8C98C6), 1);   // (the fuller)
-        bar(bits, W, HC, X(sx0 - 15), X(sx0 + 15), Y(T + 34), 3 * m, [&](float) { return gold; }, 1);   // (the guard, its ends, its gem)
-        ellipse(bits, W, HC, X(sx0 - 16), Y(T + 34), 3.6f * m, 3.6f * m, 0, gold, 1);
-        ellipse(bits, W, HC, X(sx0 + 16), Y(T + 34), 3.6f * m, 3.6f * m, 0, gold, 1);
-        ellipse(bits, W, HC, X(sx0), Y(T + 34), 4.4f * m, 4.4f * m, 0, pale, 1);
-        ellipse(bits, W, HC, X(sx0), Y(T + 34), 3.3f * m, 3.3f * m, 0, hex(0x4B3CC4), 1);
+        sword(bits, W, HC, X, Y, m, sx0, T, 1);
         if (alive) {   // (a gleam running down the blade every few seconds)
             const float g = std::fmod(t / 2.8f, 1.0f), gy = T + 40 + 105 * g;
             glow(bits, W, HC, X(sx0 + 2), Y(gy), 9 * m, pale, 0.5f * std::sin(3.14159f * g));
+        }
+        // (ReLink-R 0.0.3) the logo at the top left: the same sword, small, beside the name
+        sword(bits, W, H, X, Y, m, 38, 22, 0.21f, false);
+        // the bar at the bottom: gold as far as the sword is out of the stone, while there is a number
+        if (!v.label.empty() && !v.pct.empty()) {
+            const float bx0 = 30, bx1 = 650, by = 341, br = 2.6f;
+            bar(bits, W, H, X(bx0 + br), X(bx1 - br), Y(by), br * m, [&](float) { return hex(0x262252); }, 1);
+            if (p > 0.004f) {
+                const float x0 = X(bx0 + br), x1 = X(bx0 + br + (bx1 - bx0 - 2 * br) * clamp01(p));
+                bar(bits, W, H, x0, x1, Y(by), br * m, [&](float xx) { return mix(gold, pale, clamp01((xx - x0) / std::max(1.0f, X(bx1) - x0))); }, 1);
+            }
         }
     } else {
         fill(dc, 0, 0, W, H, RGB(0x12, 0x10, 0x2A));
@@ -394,35 +431,66 @@ inline void paint_startup_view(HDC dc, uint32_t w, uint32_t h, int pct, const St
     const auto typeface = [&](float px, const char* rubik, int weight) {
         return face(own ? rubik : "Segoe UI", std::max(8, (int)std::lround(px * m)), own ? (weight == FW_BOLD ? FW_BOLD : FW_NORMAL) : weight);
     };
-    HFONT big = typeface(34, "Rubik ExtraBold", FW_HEAVY), line = typeface(13, "Rubik", FW_NORMAL), sign = typeface(11, "Rubik", FW_BOLD);
-    HGDIOBJ old = SelectObject(dc, big);
-    SetTextAlign(dc, TA_CENTER | TA_TOP);
-    const int cx = W / 2;
+    // (sizes in frame units: at 1280 x 720 one is 1.88 pixels)
+    HFONT big = typeface(38, "Rubik ExtraBold", FW_HEAVY), unit = typeface(14, "Rubik", FW_NORMAL), line = typeface(7, "Rubik", FW_NORMAL),
+          caps = typeface(6.5f, "Rubik", FW_BOLD), name_f = typeface(12.5f, "Rubik", FW_BOLD), ver_f = typeface(6.5f, "Rubik", FW_NORMAL);
+    HGDIOBJ old = SelectObject(dc, name_f);
+    // the name beside the logo's sword, its -R gold, and the version after it, faint
+    SetTextAlign(dc, TA_LEFT | TA_BASELINE);
+    int at = (int)X(52);
+    const int name_base = (int)Y(43);
+    SetTextColor(dc, RGB(0xEE, 0xEB, 0xFA));
+    TextOutA(dc, at, name_base, "ReLink", 6);
+    at += text_w(dc, "ReLink");
+    SetTextColor(dc, RGB(0xE2, 0xBE, 0x5A));
+    TextOutA(dc, at, name_base, "-R", 2);
+    at += text_w(dc, "-R");
+    if (!v.version.empty()) {
+        SelectObject(dc, ver_f);
+        SetTextColor(dc, RGB(0x8F, 0x89, 0xB8));
+        TextOutA(dc, at + (int)(6 * m), name_base, v.version.c_str(), (int)v.version.size());
+    }
     if (!v.label.empty()) {
-        // the number, in gold, and one line under it: what is being done and the time left
-        if (!v.pct.empty()) {   // (during the ending, the number the sword shows: it reaches 100% with it)
-            const std::string n = (v.outro >= 0 ? std::to_string((int)std::lround(p * 100)) : v.pct) + "%";
-            SetTextColor(dc, RGB(0xE2, 0xBE, 0x5A));
-            TextOutA(dc, cx, (int)Y(262), n.c_str(), (int)n.size());
-        }
-        std::string says = v.label == "CLOSING"    ? "Closing: what is done is kept for the next start"
+        // what is being done, in spaced gold capitals
+        std::string says = v.label == "CLOSING"    ? "Closing"
                            : v.label == "STARTING" ? "Starting the game"
                            : v.stage >= 1 && !v.gpu.empty() ? "Preparing shaders for your " + v.gpu
                                                             : "Preparing shaders";
-        if (!v.right.empty() && v.label == "LOADING") says += "  \xB7  " + v.right;
+        for (char& ch : says) ch = (char)std::toupper((unsigned char)ch);
+        const bool counted = !v.pct.empty();
+        SelectObject(dc, caps);
+        SetTextColor(dc, RGB(0xE2, 0xBE, 0x5A));
+        spaced(dc, says, (int)X(30), (int)Y(counted ? 279 : 318), std::max(1, (int)std::lround(2 * m)), false);
+        if (counted) {
+            // the number, large, its % after it, and the time left at the right, on one baseline
+            const int base = (int)Y(329);
+            const std::string n = v.outro >= 0 ? std::to_string((int)std::lround(p * 100)) : v.pct;   // (the ending: the sword's own)
+            SetTextAlign(dc, TA_LEFT | TA_BASELINE);
+            SelectObject(dc, big);
+            SetTextColor(dc, RGB(0xEE, 0xEB, 0xFA));
+            TextOutA(dc, (int)X(29), base, n.c_str(), (int)n.size());
+            const int nw = text_w(dc, n);
+            SelectObject(dc, unit);
+            SetTextColor(dc, RGB(0xB3, 0xAD, 0xD6));
+            TextOutA(dc, (int)X(29) + nw + (int)(4 * m), base, "%", 1);
+            if (v.label == "LOADING" && !v.right.empty()) {
+                SelectObject(dc, line);
+                SetTextAlign(dc, TA_RIGHT | TA_BASELINE);
+                TextOutA(dc, (int)X(650), base, v.right.c_str(), (int)v.right.size());
+            }
+        }
+        // one line on the wait
+        const char* why = v.label == "CLOSING"    ? "What is done is kept for the next start."
+                          : v.label == "STARTING" ? "In the game, Insert or F1 opens the settings."
+                                                  : "Once only, and again after a graphics driver update. In the game, Insert or F1 opens the settings.";
         SelectObject(dc, line);
         SetTextColor(dc, RGB(0xB3, 0xAD, 0xD6));
-        TextOutA(dc, cx, (int)Y(v.pct.empty() ? 270 : 304), says.c_str(), (int)says.size());
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
+        TextOutA(dc, (int)X(30), (int)Y(350), why, (int)std::strlen(why));
     }
-    // the name, small, in spaced capitals at the bottom, and the version after it
-    SelectObject(dc, sign);
-    SetTextColor(dc, RGB(0xA8, 0x8E, 0x4A));
-    std::string name = "RELINK-R";
-    if (!v.version.empty()) name += "   " + v.version;
-    spaced(dc, name, cx, (int)Y(383 - 16 - 13), std::max(1, (int)std::lround(3 * m)), true);
     SetTextAlign(dc, TA_LEFT | TA_TOP);
     SelectObject(dc, old);
-    for (HFONT f : {big, line, sign}) DeleteObject(f);
+    for (HFONT f : {big, unit, line, caps, name_f, ver_f}) DeleteObject(f);
 }
 
 } // namespace mkwvk

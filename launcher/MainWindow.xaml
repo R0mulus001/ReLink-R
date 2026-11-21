@@ -13,16 +13,7 @@
   <Grid x:Name="Root" ClipToBounds="True" Background="{StaticResource Shell}">
     <Grid.RowDefinitions><RowDefinition Height="32"/><RowDefinition/></Grid.RowDefinitions>
 
-    <!-- the grooves along the top, and the window's own buttons -->
-    <Rectangle Height="7" Margin="260,0,260,0" VerticalAlignment="Center" RadiusX="2" RadiusY="2">
-      <Rectangle.Fill>
-        <DrawingBrush TileMode="Tile" Viewport="0,0,9,7" ViewportUnits="Absolute" Viewbox="0,0,9,7" ViewboxUnits="Absolute">
-          <DrawingBrush.Drawing>
-            <GeometryDrawing Brush="{StaticResource Groove}"><GeometryDrawing.Geometry><RectangleGeometry Rect="0,0,3,7"/></GeometryDrawing.Geometry></GeometryDrawing>
-          </DrawingBrush.Drawing>
-        </DrawingBrush>
-      </Rectangle.Fill>
-    </Rectangle>
+    <!-- the window's own buttons (ReLink-R 0.0.3: the shell plain, no grooves) -->
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
       <Button x:Name="MinButton" Style="{StaticResource Chrome}" Click="Minimize">
         <Path Data="M0,0 L11,0" Stroke="{StaticResource Bone}" StrokeThickness="1.6" Margin="0,7,0,0"/>
@@ -41,8 +32,11 @@
       <Border x:Name="LeftColumn" Background="{StaticResource Side}" CornerRadius="12" Margin="12,0,0,12" Padding="12,16,12,10">
         <DockPanel LastChildFill="False">
           <StackPanel DockPanel.Dock="Top">
-            <TextBlock Text="ReLink-R" FontWeight="ExtraBold" FontSize="19" Foreground="{StaticResource SideText}" Margin="6,0,0,0"/>
-            <StackPanel x:Name="NavPanel" Margin="0,18,0,0">
+            <StackPanel Orientation="Horizontal" Margin="6,0,0,0">
+              <Image Source="{StaticResource SwordMark}" Width="13" Height="42" VerticalAlignment="Center"/>
+              <TextBlock FontWeight="Bold" FontSize="22" Foreground="{StaticResource SideText}" VerticalAlignment="Center" Margin="10,0,0,1"><Run Text="ReLink"/><Run Text="-R" Foreground="{StaticResource Gold}"/></TextBlock>
+            </StackPanel>
+            <StackPanel x:Name="NavPanel" Margin="0,16,0,0">
               <RadioButton x:Name="NavHome" Style="{StaticResource Nav}" GroupName="Nav" IsChecked="True" Checked="NavChanged" Tag="&#xE80F;" BorderBrush="{StaticResource SideText}"/>
               <RadioButton x:Name="NavOptions" Style="{StaticResource Nav}" GroupName="Nav" Checked="NavChanged" Tag="&#xE9E9;" BorderBrush="{StaticResource Red}"/>
               <RadioButton x:Name="NavMods" Style="{StaticResource Nav}" GroupName="Nav" Checked="NavChanged" Tag="&#xEA86;" BorderBrush="{StaticResource Indigo}">
@@ -109,41 +103,41 @@
             </Grid>
             <Grid Grid.Row="2" Margin="0,12,0,0">
               <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <Border x:Name="LooksCard" BorderBrush="{StaticResource Red}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="LooksClick">
+              <Border x:Name="LooksCard" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="LooksClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="LooksMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Red}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="LooksMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
-                    <TextBlock x:Name="LooksHead" FontSize="12.5" Foreground="{StaticResource BoneSoft}"/>
+                    <TextBlock x:Name="LooksHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="LooksText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
                     <TextBlock x:Name="LooksSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
-              <Border x:Name="MovesCard" Grid.Column="2" BorderBrush="{StaticResource Yellow}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="MovesClick">
+              <Border x:Name="MovesCard" Grid.Column="2" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="MovesClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="MovesMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Yellow}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="MovesMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
-                    <TextBlock x:Name="MovesHead" FontSize="12.5" Foreground="{StaticResource BoneSoft}"/>
+                    <TextBlock x:Name="MovesHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="MovesText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
                     <TextBlock x:Name="MovesSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
-              <Border x:Name="ModsCard" Grid.Column="4" BorderBrush="{StaticResource Indigo}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="ModsCardClick">
+              <Border x:Name="ModsCard" Grid.Column="4" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="ModsCardClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="ModsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Green}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="ModsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
-                    <TextBlock x:Name="ModsHead" FontSize="12.5" Foreground="{StaticResource BoneSoft}"/>
+                    <TextBlock x:Name="ModsHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="ModsCardText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
                     <TextBlock x:Name="ModsSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
-              <Border x:Name="NewsCard" Grid.Column="6" BorderBrush="{StaticResource Blue}" BorderThickness="0,4,0,0" Background="#1C1940" CornerRadius="14" Padding="14,10,14,10" Cursor="Hand" MouseLeftButtonDown="NewsCardClick">
+              <Border x:Name="NewsCard" Grid.Column="6" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="NewsCardClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="NewsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Blue}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="NewsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
-                    <TextBlock x:Name="NewsHead" FontSize="12.5" Foreground="{StaticResource BoneSoft}"/>
+                    <TextBlock x:Name="NewsHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="NewsText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
                     <TextBlock x:Name="NewsSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
@@ -162,7 +156,7 @@
               <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/>
               <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Border Style="{StaticResource Strip}" Background="{StaticResource Blue}"><TextBlock x:Name="InstallTitle" Style="{StaticResource ViewTitle}"/></Border>
+            <Border Style="{StaticResource Strip}"><TextBlock x:Name="InstallTitle" Style="{StaticResource ViewTitle}"/></Border>
             <TextBlock x:Name="InstallSub" Grid.Row="1" Style="{StaticResource Body}" Margin="2,10,0,0"/>
             <TextBlock x:Name="CopyHead" Grid.Row="2" Style="{StaticResource Section}" Margin="2,16,0,4"/>
             <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -190,12 +184,25 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Border Style="{StaticResource Strip}" Background="{StaticResource Green}"><TextBlock x:Name="BuildTitle" Style="{StaticResource ViewTitle}"/></Border>
+            <Border Style="{StaticResource Strip}"><TextBlock x:Name="BuildTitle" Style="{StaticResource ViewTitle}"/></Border>
             <TextBlock x:Name="BuildSub" Grid.Row="1" Style="{StaticResource Body}" Foreground="{StaticResource BoneFaint}" Margin="2,8,0,0" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
-            <Grid x:Name="ProgressBlock" Grid.Row="2" Margin="2,8,0,10" Visibility="Collapsed">
+            <Grid x:Name="ProgressBlock" Grid.Row="2" Margin="2,10,0,10" Visibility="Collapsed">
               <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <TextBlock x:Name="PercentText" Text="0 %" FontWeight="ExtraBold" FontSize="46" VerticalAlignment="Center"/>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <TextBlock x:Name="PercentText" Text="0 %" FontWeight="ExtraBold" FontSize="52" Foreground="{StaticResource Gold}" VerticalAlignment="Center"/>
               <TextBlock x:Name="BuildNote" Grid.Column="1" Style="{StaticResource Body}" VerticalAlignment="Center" Margin="22,0,0,0"/>
+              <!-- (ReLink-R 0.0.3) the sword lying down: its hilt, and the bar as its blade, run on from under the guard and gold as
+                   far as the install is (Install.cs SetProgress) -->
+              <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,12,4,0" Height="30">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="38"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                <Border Grid.Column="1" Height="14" Margin="-4,0,0,0" CornerRadius="0,7,7,0" Background="#262252" ClipToBounds="True">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition x:Name="BladeDone" Width="0*"/><ColumnDefinition x:Name="BladeLeft" Width="1*"/></Grid.ColumnDefinitions>
+                    <Border CornerRadius="0,7,7,0" Background="{StaticResource GoldBlade}"/>
+                  </Grid>
+                </Border>
+                <Image Source="{StaticResource HiltMark}" Width="38" Height="30"/>
+              </Grid>
             </Grid>
             <StackPanel x:Name="StageList" Grid.Row="3"/>
             <TextBox x:Name="Log" Grid.Row="3" Visibility="Collapsed" IsReadOnly="True" FontFamily="{StaticResource Mono}" FontSize="11.5"
@@ -216,7 +223,7 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Border Style="{StaticResource Strip}" Background="{StaticResource Red}"><TextBlock x:Name="ProblemTitle" Style="{StaticResource ViewTitle}"/></Border>
+            <Border Style="{StaticResource Strip}"><TextBlock x:Name="ProblemTitle" Style="{StaticResource ViewTitle}"/></Border>
             <TextBlock x:Name="ProblemSub" Grid.Row="1" Style="{StaticResource Body}" Margin="2,10,0,0"/>
             <TextBlock x:Name="ProblemHead" Grid.Row="2" Style="{StaticResource Section}" Margin="2,16,0,4"/>
             <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -240,16 +247,16 @@
               <StaticResource x:Key="Accent" ResourceKey="Indigo"/><StaticResource x:Key="AccentTint" ResourceKey="IndigoTint"/><StaticResource x:Key="AccentEdge" ResourceKey="IndigoEdge"/>
             </Grid.Resources>
             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <Border Style="{StaticResource Strip}" Background="{StaticResource Green}" HorizontalAlignment="Left">
-              <TextBlock x:Name="ModsTitle" FontWeight="Bold" FontSize="16" Foreground="White"/>
+            <Border Style="{StaticResource Strip}" HorizontalAlignment="Left">
+              <TextBlock x:Name="ModsTitle" Style="{StaticResource ViewTitle}"/>
             </Border>
             <TextBlock x:Name="ModsIntro" Grid.Row="1" Style="{StaticResource Body}" Margin="2,10,0,8"/>
             <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
               <StackPanel x:Name="ModsList"/>
             </ScrollViewer>
             <WrapPanel Grid.Row="3" Margin="2,10,0,0">
-              <Button x:Name="ModsOpenFolder" Style="{StaticResource Link}" Foreground="{StaticResource Green}" Margin="0,0,22,0" Click="OpenModsFolder"/>
-              <Button x:Name="ModsRebuild" Style="{StaticResource Link}" Foreground="{StaticResource Green}" Visibility="Collapsed" Click="RebuildClick"/>
+              <Button x:Name="ModsOpenFolder" Style="{StaticResource Link}" Margin="0,0,22,0" Click="OpenModsFolder"/>
+              <Button x:Name="ModsRebuild" Style="{StaticResource Link}" Visibility="Collapsed" Click="RebuildClick"/>
             </WrapPanel>
           </Grid>
 
@@ -257,12 +264,12 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <UniformGrid Rows="1" Columns="4" Height="42" Margin="-8,-4,-8,0">
+            <StackPanel Orientation="Horizontal" Height="42" Margin="-4,-4,0,0">
               <RadioButton x:Name="TabDisplay" Style="{StaticResource Tab}" Background="{StaticResource Red}" GroupName="Tabs" IsChecked="True" Checked="TabChanged"/>
               <RadioButton x:Name="TabSmooth" Style="{StaticResource Tab}" Background="{StaticResource Yellow}" Foreground="{StaticResource Bone}" GroupName="Tabs" Checked="TabChanged"/>
               <RadioButton x:Name="TabGame" Style="{StaticResource Tab}" Background="{StaticResource Green}" GroupName="Tabs" Checked="TabChanged"/>
               <RadioButton x:Name="TabControls" Style="{StaticResource Tab}" Background="{StaticResource Blue}" GroupName="Tabs" Checked="TabChanged"/>
-            </UniformGrid>
+            </StackPanel>
             <Grid Grid.Row="1" Margin="0,8,0,0">
               <ScrollViewer x:Name="PageDisplay" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <ScrollViewer.Resources><StaticResource x:Key="Accent" ResourceKey="Red"/><StaticResource x:Key="AccentTint" ResourceKey="RedTint"/><StaticResource x:Key="AccentEdge" ResourceKey="RedEdge"/></ScrollViewer.Resources>
@@ -295,11 +302,11 @@
     <Grid x:Name="PlayingOverlay" Grid.Row="1" Background="{StaticResource Shell}" Visibility="Collapsed">
       <Border Background="{StaticResource Label}" CornerRadius="12" Padding="40,30" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="620">
         <StackPanel>
-          <Border Style="{StaticResource Strip}" Background="{StaticResource Green}" HorizontalAlignment="Center">
+          <Border Style="{StaticResource Strip}" HorizontalAlignment="Center">
             <TextBlock x:Name="PlayingTitle" Style="{StaticResource ViewTitle}" FontSize="24"/>
           </Border>
           <TextBlock x:Name="PlayingHint" Style="{StaticResource Body}" TextAlignment="Center" Margin="0,14,0,0"/>
-          <Button x:Name="RestoreNow" Style="{StaticResource Link}" Foreground="{StaticResource Green}" HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="RestoreNowClick"/>
+          <Button x:Name="RestoreNow" Style="{StaticResource Link}" HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="RestoreNowClick"/>
         </StackPanel>
       </Border>
     </Grid>

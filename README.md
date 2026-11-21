@@ -5,6 +5,14 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.3-dev**: the look of the approved drafts, put together: the sword beside the launcher's name; the pages' titles on
+  the panel instead of on strips of colour, the options' pages and their choices as rounded pills with the chosen one in gold,
+  Home's cards with one thin edge, the links one readable violet; the install's number in gold over a sword lying down, its
+  blade filling as the install goes. The shader screen at the first start: the logo at the top left, and at the bottom left
+  what is being done, the number, the time left and a gold bar, with faint rays behind the sword. The in-game menu: the name
+  and the sword over the panel, its pages as pills. The icon's grip dark on the violet, so the hilt reads as one piece; the
+  sword's blade, guard, grip and pommel meet with no seam on every screen. No grooves on the shell. Nothing the launcher, the
+  builder or the menu does has changed.
 - **0.0.2-dev**: ReLink-R's own look, night violet and gold with round corners, around a sword: a new icon and logo; the
   launcher, its install and build pages in the new colours, with the sword standing in its stone pedestal behind them; the
   shader screen at the first start draws the sword out of the pedestal as the shaders get ready; the in-game menu (Insert or

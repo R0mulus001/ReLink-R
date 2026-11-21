@@ -517,7 +517,14 @@ public partial class MainWindow
         }
     }
 
-    void SetProgress(double f) => PercentText.Text = $"{(int)(Math.Clamp(f, 0, 1) * 100)} %";
+    void SetProgress(double f)
+    {
+        f = Math.Clamp(f, 0, 1);
+        PercentText.Text = $"{(int)(f * 100)} %";
+        // (ReLink-R 0.0.3: the sword's blade gold as far as the install is)
+        BladeDone.Width = new GridLength(f, GridUnitType.Star);
+        BladeLeft.Width = new GridLength(1 - f, GridUnitType.Star);
+    }
 
     void Tick()
     {
