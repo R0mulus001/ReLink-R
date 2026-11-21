@@ -1,5 +1,7 @@
 // The game's start-up screen (gpu/vk/vk_startup_paint.h) at a few moments, into BMP files: for the Snapshots workflow
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#undef small   // (rpcndr.h: the painter has a variable of that name)
 #include <cstdio>
 #include <string>
 #include "vk_startup_paint.h"
