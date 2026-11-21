@@ -40,7 +40,7 @@
     <SolidColorBrush x:Key="GreenEdge" Color="#6FC28A"/>
     <SolidColorBrush x:Key="Blue" Color="#4B3CC4"/>
     <SolidColorBrush x:Key="BlueTint" Color="#262252"/>
-    <SolidColorBrush x:Key="BlueEdge" Color="#6A5AE6"/>
+    <SolidColorBrush x:Key="BlueEdge" Color="#9A8CF5"/>
     <SolidColorBrush x:Key="Indigo" Color="#5C55C8"/>
     <SolidColorBrush x:Key="IndigoTint" Color="#24224E"/>
     <SolidColorBrush x:Key="IndigoEdge" Color="#8A84E0"/>
@@ -373,7 +373,7 @@
     <!-- A quiet action: words of the page's colour, underlined when the pointer is on them -->
     <Style x:Key="Link" TargetType="Button">
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+      <Setter Property="Foreground" Value="{DynamicResource AccentEdge}"/>   <!-- (ReLink-R 0.0.3: the page's light edge colour, readable on the violet) -->
       <Setter Property="FontFamily" Value="{StaticResource Text}"/>
       <Setter Property="FontWeight" Value="Medium"/>
       <Setter Property="FontSize" Value="14"/>

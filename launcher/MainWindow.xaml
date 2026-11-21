@@ -105,7 +105,7 @@
               <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/><ColumnDefinition Width="10"/><ColumnDefinition/></Grid.ColumnDefinitions>
               <Border x:Name="LooksCard" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="LooksClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="LooksMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Red}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="LooksMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="LooksHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="LooksText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
@@ -115,7 +115,7 @@
               </Border>
               <Border x:Name="MovesCard" Grid.Column="2" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="MovesClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="MovesMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Yellow}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="MovesMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="MovesHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="MovesText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
@@ -125,7 +125,7 @@
               </Border>
               <Border x:Name="ModsCard" Grid.Column="4" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="ModsCardClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="ModsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Green}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="ModsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="ModsHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="ModsCardText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
@@ -135,7 +135,7 @@
               </Border>
               <Border x:Name="NewsCard" Grid.Column="6" BorderBrush="{StaticResource Rule}" BorderThickness="1" Background="#1C1940" CornerRadius="14" Padding="14,12,14,12" Cursor="Hand" MouseLeftButtonDown="NewsCardClick">
                 <DockPanel LastChildFill="False">
-                  <TextBlock DockPanel.Dock="Bottom" x:Name="NewsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource Blue}" Margin="0,4,0,0"/>
+                  <TextBlock DockPanel.Dock="Bottom" x:Name="NewsMore" FontSize="12.5" FontWeight="Medium" Foreground="{StaticResource RedEdge}" Margin="0,4,0,0"/>
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="NewsHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="NewsText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
@@ -255,8 +255,8 @@
               <StackPanel x:Name="ModsList"/>
             </ScrollViewer>
             <WrapPanel Grid.Row="3" Margin="2,10,0,0">
-              <Button x:Name="ModsOpenFolder" Style="{StaticResource Link}" Foreground="{StaticResource Green}" Margin="0,0,22,0" Click="OpenModsFolder"/>
-              <Button x:Name="ModsRebuild" Style="{StaticResource Link}" Foreground="{StaticResource Green}" Visibility="Collapsed" Click="RebuildClick"/>
+              <Button x:Name="ModsOpenFolder" Style="{StaticResource Link}" Margin="0,0,22,0" Click="OpenModsFolder"/>
+              <Button x:Name="ModsRebuild" Style="{StaticResource Link}" Visibility="Collapsed" Click="RebuildClick"/>
             </WrapPanel>
           </Grid>
 
@@ -306,7 +306,7 @@
             <TextBlock x:Name="PlayingTitle" Style="{StaticResource ViewTitle}" FontSize="24"/>
           </Border>
           <TextBlock x:Name="PlayingHint" Style="{StaticResource Body}" TextAlignment="Center" Margin="0,14,0,0"/>
-          <Button x:Name="RestoreNow" Style="{StaticResource Link}" Foreground="{StaticResource Green}" HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="RestoreNowClick"/>
+          <Button x:Name="RestoreNow" Style="{StaticResource Link}" HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="RestoreNowClick"/>
         </StackPanel>
       </Border>
     </Grid>
