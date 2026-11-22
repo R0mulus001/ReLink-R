@@ -101,7 +101,7 @@ folder, from the game files the folder keeps: your `.nup` is not needed again. S
 
 ### Where the files go
 
-- The game: the folder you choose (`Games\ReLink` in your user folder by default). Your copy is never changed.
+- The game: the folder you choose (`Games\ReLink-R` in your user folder by default), always its own folder: ReLink-R never plays, updates nor installs into a folder holding Project ReLink's game, so both can be installed side by side. Your copy is never changed.
 - ReLink itself: `%LOCALAPPDATA%\ReLink`. The build files (about 4 GB) are deleted once the game is ready.
 - To uninstall: delete the game folder, `%LOCALAPPDATA%\ReLink` and the shortcuts.
 
@@ -277,8 +277,8 @@ Only a new dump of the game brings the real files back.
 Two tools in this repository do it by hand, from your own files (nothing of the game is in them):
 
 ```powershell
-python -I tools/dump_check.py "C:\Games\ReLink\romfs\Tex"
-python -I tools/dump_repair.py "C:\Games\ReLink\romfs" "C:\Games\ReLink\mods\00-dump-repair"
+python -I tools/dump_check.py "C:\Games\ReLink-R\romfs\Tex"
+python -I tools/dump_repair.py "C:\Games\ReLink-R\romfs" "C:\Games\ReLink-R\mods\00-dump-repair"
 ```
 
 The first counts the damaged files; the second writes the mod, and needs no rebuild: the game reads mods when it starts.
@@ -322,8 +322,8 @@ game is never changed. `relink_exefs_mods.txt` in the game folder lists what the
 For developers. The launcher runs the same script, `nx2/make_game.py`.
 
 ```powershell
-python -I nx2/make_game.py --nup "C:\path\your-game.nup" --out "C:\Games\ReLink" --language en-US
-python -I nx2/make_game.py --romfs "C:\path\romfs" --exefs "C:\path\exefs" --out "C:\Games\ReLink" --language en-US
+python -I nx2/make_game.py --nup "C:\path\your-game.nup" --out "C:\Games\ReLink-R" --language en-US
+python -I nx2/make_game.py --romfs "C:\path\romfs" --exefs "C:\path\exefs" --out "C:\Games\ReLink-R" --language en-US
 ```
 
 `--game <path>` takes either one (a `.nup`, or a folder holding `exefs` and `romfs`) in place of those options.

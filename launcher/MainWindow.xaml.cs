@@ -317,11 +317,11 @@ public partial class MainWindow : Window
                 checks[dumps[0].Path] = (true, "This is the supported version.");
                 checks[dumps[1].Path] = (false, "This is build 1a2b3c4d. ReLink supports build e0f3ccfa.");
                 chosenNup = dumps[0].Path;
-                outPath = @"E:\Games\ReLink";
+                outPath = @"E:\Games\ReLink-R";
                 ShowInstall();
                 break;
             case "build":
-                outPath = @"E:\Games\ReLink";
+                outPath = @"E:\Games\ReLink-R";
                 MakeRows(update: false);
                 Show(View.Build);
                 BuildTitle.Text = L("Installation en cours", "Installing the game");
