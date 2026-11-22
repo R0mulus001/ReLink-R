@@ -5,7 +5,8 @@ SDK's LICENSE.txt, fetched beside them; read it before using them). This fetches
 pinned release, each file checked against its SHA-256, into <sdk folder>:
   - LICENSE.txt and the SDK's headers (include/), the same for every platform;
   - the library the build links (lib/): libnvsdk_ngx.a on Linux, nvsdk_ngx_s.lib (the /MT one) on Windows;
-  - the DLSS runtime the driver loads (runtime/): libnvidia-ngx-dlss.so.<version> on Linux, nvngx_dlss.dll on Windows.
+  - the DLSS runtime the driver loads (runtime/): libnvidia-ngx-dlss.so.<version> on Linux, nvngx_dlss.dll on Windows;
+    on Windows also DLSS Frame Generation's, nvngx_dlssg.dll (RTX 40 and later; NVIDIA's guide gives it Windows only).
 The NGX core itself comes with NVIDIA's driver (libnvidia-ngx.so on Linux; _nvngx.dll on Windows, which is loaded from the
 driver's own folder and is never to be put beside the game).
 
@@ -70,6 +71,9 @@ PLATFORMS = {
         # (the static NGX loader built against the static C runtime (/MT); llvm-mingw links it with gpu/vk/vk_ngx_msvc_rt.cpp)
         "library": ("lib/Windows_x86_64/x64/nvsdk_ngx_s.lib", "7b9a5239c1145af5f645ab472aa066f9ea79db36ac819562312aae69d65f3765"),
         "runtime": ("lib/Windows_x86_64/rel/nvngx_dlss.dll", "d00b5b0ab29c3ca101b70c3a5ecb3a01b7ef33766a3383a28a18623083e6123e"),
+        # (DLSS Frame Generation's runtime, 310.9.16, signed by NVIDIA: its SHA-256 from our download of 21/11/2026, whose git
+        # blob id is the repository's, 71b8070cdced79e8df3414060337c84d91e38422)
+        "more": [("lib/Windows_x86_64/rel/nvngx_dlssg.dll", "8d59d49b36410dd6b62fef2503a5871d347415bd85d943fa0848563a95dd50c7")],
     },
 }
 
@@ -96,7 +100,8 @@ def destination(path):
 def files(platform, runtime=True):
     """[(path in NVIDIA's repository, SHA-256, path in the SDK folder)] for one platform; runtime=False: what a build reads only"""
     spec = PLATFORMS[platform]
-    return [(p, s, destination(p)) for p, s in COMMON + [spec["library"]] + ([spec["runtime"]] if runtime else [])]
+    rt = [spec["runtime"]] + spec.get("more", []) if runtime else []
+    return [(p, s, destination(p)) for p, s in COMMON + [spec["library"]] + rt]
 
 
 def library(sdk, platform):
@@ -111,6 +116,12 @@ def runtime(sdk, platform):
 
 def runtime_name(platform):
     return PLATFORMS[platform]["runtime"][0].rsplit("/", 1)[1]
+
+
+def more_runtimes(sdk, platform):
+    """The other runtimes of that platform in this SDK folder (DLSS Frame Generation's on Windows), those that are there"""
+    paths = [os.path.join(sdk, *destination(p).split("/")) for p, _ in PLATFORMS[platform].get("more", [])]
+    return [p for p in paths if os.path.isfile(p)]
 
 
 def sha256(path):
@@ -152,13 +163,15 @@ def fetch(sdk, platform, opener=urllib.request.urlopen, say=print, runtime=True)
 
 def install_runtime(sdk, platform, folder):
     """The SDK folder's DLSS runtime copied into folder (made when missing): where the game finds it"""
-    src = runtime(sdk, platform)
-    dst = os.path.join(folder, runtime_name(platform))
     os.makedirs(folder, exist_ok=True)
-    if not (os.path.isfile(dst) and os.path.getsize(dst) == os.path.getsize(src) and sha256(dst) == sha256(src)):
-        shutil.copyfile(src, dst + ".part")
-        os.replace(dst + ".part", dst)
-    return dst
+    first = None
+    for src in [runtime(sdk, platform)] + more_runtimes(sdk, platform):   # (an SDK folder fetched before 0.7.9.3 has no
+        dst = os.path.join(folder, os.path.basename(src))                  # Frame Generation runtime: DLSS's alone, as then)
+        if not (os.path.isfile(dst) and os.path.getsize(dst) == os.path.getsize(src) and sha256(dst) == sha256(src)):
+            shutil.copyfile(src, dst + ".part")
+            os.replace(dst + ".part", dst)
+        first = first or dst
+    return first
 
 
 def accepted(flag, ask=input, interactive=None):

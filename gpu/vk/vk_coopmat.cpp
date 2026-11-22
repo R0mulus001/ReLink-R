@@ -343,6 +343,41 @@ void software_multiplies(const char* why) {
 } // namespace
 
 void coopmat_init() {
+    {   // (relink) The translation's vendor and driver fixes, chosen from the device's properties; NVIDIA's driver gets none, so its
+        // translated shaders stay as they were. Each has an RX_VK_ switch (0 off, 1 on) to force it on any GPU; all are in disk_stamp
+        VkPhysicalDeviceDriverProperties drv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        p2.pNext = &drv;
+        vkGetPhysicalDeviceProperties2(dev.physical, &p2);
+        bool fetch = dev.props.vendorID != 0x10DE;
+        // (AMD's Windows driver whose driverInfo names its proprietary shader compiler: RDNA 1/2, RX 5000 and 6000)
+        bool nan = drv.driverID == VK_DRIVER_ID_AMD_PROPRIETARY && std::strstr(drv.driverInfo, "proprietary shader compiler") != nullptr;
+        bool gather = false;
+        switch (drv.driverID) {
+        case VK_DRIVER_ID_AMD_PROPRIETARY:
+        case VK_DRIVER_ID_AMD_OPEN_SOURCE:
+        case VK_DRIVER_ID_MESA_RADV:
+        case VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS:
+        case VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA:
+            gather = true;
+            break;
+        default:
+            break;
+        }
+        const auto over = [](const char* name, bool& value) {
+            if (const char* e = std::getenv(name); e && *e) value = std::atoi(e) != 0;
+        };
+        over("RX_VK_FETCH_BOUNDS", fetch);
+        over("RX_VK_NAN_BITS", nan);
+        over("RX_VK_GATHER_OFFSET", gather);
+        Shader::Backend::SPIRV::fetch_bounds = fetch;
+        // (dev.features.robustBufferAccess is on exactly when robustBufferAccess2 is: vk_main.cpp create_device)
+        Shader::Backend::SPIRV::fetch_bounds_buffers = fetch && !dev.features.robustBufferAccess;
+        Shader::Backend::SPIRV::nan_bits = nan;
+        dev.gather_offset = gather;
+        logf("vk: vendor fixes for %s (%s): out-of-bounds texel fetches 0 %d, NaN tests by bits %d, gather offset %d",
+             drv.driverName, drv.driverInfo, (int)fetch, (int)nan, (int)gather);
+    }
     // (amd-fix) NaN guard on float colour outputs (mma_layout.h frag_nan_guard), on every card since v2.0.6 as NX2navi's patch 0027
     // has it: the neon plants were reported on NVIDIA cards too, and one NaN texel spreads through bloom and blur
     Shader::Backend::SPIRV::frag_nan_guard = !std::getenv("RX_VK_NO_NAN_GUARD");

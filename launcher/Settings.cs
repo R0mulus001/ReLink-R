@@ -34,6 +34,11 @@ static class Game
         return null;
     }
 
+    /// (ReLink-R 0.0.4) The folder holds Project ReLink's game, not ReLink-R's: a build whose version is not one of ReLink-R's
+    /// (v0.0.x). ReLink-R never plays, updates nor builds into such a folder, so the two installs stay apart
+    public static bool ProjectReLinks(string? folder) =>
+        Installed(folder) && Version(folder!) is { } v && !v.StartsWith("v0.0.", StringComparison.Ordinal);
+
     /// The folder keeps the game files it was built from: an update needs nothing else
     public static bool KeepsGameFiles(string folder) =>
         Directory.Exists(Path.Combine(folder, ".relink_exefs")) && Directory.Exists(Path.Combine(folder, "romfs"));
@@ -90,16 +95,29 @@ static class Game
 sealed class Settings
 {
     // the game's rows (gpu/vk/vk_menu.cpp: ini keys are the row names, lower case, spaces as underscores)
-    public int Fullscreen = 1, FrameGeneration = 0, FramePacing = 0, FrameRate = 0, Resolution = 1, Upscaling = 0, Sharpness = 0,
+    public int Fullscreen = 1, FrameGeneration = 0, FramePacing = 1, FrameRate = 0, Resolution = 1, Upscaling = 0, Sharpness = 0,
                VSync = 0,   // (the game's V-Sync row, saved as v-sync: 0 off, 1 on, FIFO)
                GameSpeed = 0, Handheld = 0, Ultrawide = 0, FpsCounter = 0,
-               Upscaler = 0;   // (the game's Upscaler row, saved as dlss: 0 the game's own, 1 NVIDIA DLSS, 2 NVIDIA DLAA, 3 AMD FSR, 4 AMD FSR native AA)
+               Upscaler = 0,   // (the game's Upscaler row, saved as dlss: 0 the game's own, 1 NVIDIA DLSS, 2 NVIDIA DLAA, 3 AMD FSR, 4 AMD FSR native AA, 5 none: the 3D at full size, as drawn)
+               FsrVersion = 0,   // (the game's FSR version row: 0 Auto, FSR 4 where the GPU runs it; 1 FSR 3.1)
+               UpSharpness = 40;   // (relink, 0.7.9.3: the game's Sharpness row while DLSS, DLAA or FSR draws, saved as upscaler_sharpness)
+    /// The Sharpness the game uses with the chosen Upscaler: DLSS's, DLAA's and FSR's own, else the game's own upscaler's (and None's)
+    public bool UpSharpened => Upscaler is 1 or 2 or 3 or 4;
+    public int ShownSharpness
+    {
+        get => UpSharpened ? UpSharpness : Sharpness;
+        set { if (UpSharpened) UpSharpness = value; else Sharpness = value; }
+    }
     // the launcher's
     public bool Display60 = true, Audio = true, InvertY = false;
     /// The game built with NVIDIA DLSS: NVIDIA's DLSS SDK fetched from NVIDIA at each build, its license accepted by ticking it
     public bool NvidiaDlss = false;
     /// The launcher's own language: en (the default) or fr (Texts.cs reads it when the launcher opens)
     public string UiLanguage = Texts.French ? "fr" : "en";
+    /// The launcher's look: light (the default) or dark (Theme.cs reads it when the launcher opens)
+    public string LauncherTheme = Theme.Chosen;
+    /// The in-game menu's look (the game's Menu look row, menu_look: 0 light, 1 dark): the launcher's look row sets it too
+    public int MenuLook = 0;
     public string Language = Texts.GameLanguageOfWindows();
     /// The game folder (empty: none yet)
     public string Folder = "";
@@ -159,14 +177,45 @@ sealed class Settings
         s.InvertY = Bool(l, "invert_y", false);
         s.NvidiaDlss = Bool(l, "nvidia_dlss", false);
         if (l.TryGetValue("ui_language", out var ui) && ui is "en" or "fr") s.UiLanguage = ui;
+        if (l.TryGetValue("theme", out var th) && th is Theme.Light or Theme.Dark) s.LauncherTheme = th;
         var here = AppContext.BaseDirectory.TrimEnd('\\', '/');
         var candidates = new[]
         {
             folder, l.TryGetValue("game_folder", out var remembered) ? remembered : null, here, Path.GetDirectoryName(here), DefaultFolder,
         };
-        s.Folder = candidates.FirstOrDefault(Game.Installed) ?? "";
+        // (ReLink-R 0.0.4: a remembered folder that now holds Project ReLink's game is passed over: with none of ReLink-R's
+        // own, the install page builds into Games\ReLink-R)
+        s.Folder = candidates.FirstOrDefault(f => Game.Installed(f) && !Game.ProjectReLinks(f)) ?? "";
+        if (s.Folder != "" && s.Folder != folder && RenameToOwnName(s.Folder) is { } renamed)
+        {
+            s.Folder = renamed;
+            s.Save();
+        }
         if (s.Folder != "") s.LoadGame();
         return s;
+    }
+
+    /// (ReLink-R 0.0.4, once) A game folder named plainly "ReLink", which ReLink-R itself built (its versions are v0.0.x),
+    /// renamed "ReLink-R" beside it, so it cannot be taken for Project ReLink's. Only when nothing is in the way: no "ReLink-R"
+    /// there already, the game not running from it. A rename on the same drive moves nothing, so it is instant; if Windows
+    /// refuses (a file open in it, say), the folder stays as it is and the launcher goes on with it. The new path, or null
+    static string? RenameToOwnName(string path)
+    {
+        try
+        {
+            var dir = new DirectoryInfo(path.TrimEnd('\\', '/'));
+            if (!string.Equals(dir.Name, "ReLink", StringComparison.OrdinalIgnoreCase) || dir.Parent is null) return null;
+            if (Game.Version(dir.FullName) is not { } v || !v.StartsWith("v0.0.", StringComparison.Ordinal)) return null;
+            var target = Path.Combine(dir.Parent.FullName, "ReLink-R");
+            if (Directory.Exists(target) || File.Exists(target)) return null;
+            if (System.Diagnostics.Process.GetProcessesByName("relink-game").Length > 0) return null;
+            Directory.Move(dir.FullName, target);
+            return Game.Installed(target) ? target : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     public static string DefaultFolder => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ReLink-R");
@@ -178,18 +227,26 @@ sealed class Settings
         Fullscreen = Int(g, "fullscreen", 1, 0, 1);
         FrameGeneration = Int(g, "frame_generation", 0, 0, 4);
         if (FrameGeneration == 1) FrameGeneration = 2;
-        FramePacing = Int(g, "frame_pacing", 0, 0, 1);
+        FramePacing = Int(g, "frame_pacing", 1, 0, 1);
+        // (relink, 0.7.9.3: the game's rule, vk_menu.cpp menu_init: a file from before the row paced the game's frames alone,
+        // with frame generation off, gets it on once; pacing_rev, written below, says its value was seen as it works now)
+        if (!g.ContainsKey("pacing_rev") && FrameGeneration == 0) FramePacing = 1;
         VSync = Int(g, "v-sync", 0, 0, 1);
         FrameRate = Int(g, "frame_rate", 0, 0, 2);   // (2: 30, smooth: HOS_FPS_CAP=30)
         // (the game's Render resolution row: 0 Auto, 1..6 = 100 %, 75 %, 67 %, 50 %, 58 %, 33 % of the output; 1, native, by default)
         Resolution = Int(g, "resolution", 1, 0, 6);
         Upscaling = Int(g, "upscaling", 0, 0, 2);
         Sharpness = Int(g, "sharpness", 0, 0, 100);
+        // (relink, 0.7.9.3: the game's rule, vk_menu.cpp menu_init: DLSS's, DLAA's and FSR's own Sharpness, 40 by default, a
+        // file from before too)
+        UpSharpness = Int(g, "upscaler_sharpness", 40, 0, 100);
         GameSpeed = Int(g, "game_speed", 0, 0, 1);
         Handheld = Int(g, "handheld_profile", 0, 0, 1);
         Ultrawide = Int(g, "ultrawide", 0, 0, 1);
-        FpsCounter = Int(g, "fps_counter", 0, 0, 1);
-        Upscaler = Int(g, "dlss", 0, 0, 4);
+        FpsCounter = Int(g, "fps_counter", 0, 0, 2);   // (2: Detailed)
+        Upscaler = Int(g, "dlss", 0, 0, 5);
+        FsrVersion = Int(g, "fsr_version", 0, 0, 1);
+        MenuLook = Int(g, "menu_look", 0, 0, 1);
         other.Clear();
         foreach (var (k, v) in g)
             if (!Known.Contains(k)) other[k] = v;
@@ -210,7 +267,7 @@ sealed class Settings
     static readonly HashSet<string> Known = new(StringComparer.OrdinalIgnoreCase)
     {
         "fullscreen", "frame_generation", "frame_pacing", "v-sync", "frame_rate", "resolution", "upscaling", "sharpness", "game_speed",
-        "handheld_profile", "ultrawide", "fps_counter", "dlss",
+        "handheld_profile", "ultrawide", "fps_counter", "dlss", "pacing_rev", "fsr_version", "menu_look", "upscaler_sharpness",
     };
 
     public void Save()
@@ -222,6 +279,7 @@ sealed class Settings
         sb.AppendLine($"invert_y={(InvertY ? 1 : 0)}");
         sb.AppendLine($"nvidia_dlss={(NvidiaDlss ? 1 : 0)}");
         sb.AppendLine($"ui_language={UiLanguage}");
+        sb.AppendLine($"theme={LauncherTheme}");
         sb.AppendLine($"game_folder={Folder}");
         Directory.CreateDirectory(Storage.Base);
         File.WriteAllText(LauncherIni, sb.ToString());
@@ -237,11 +295,15 @@ sealed class Settings
         Row("resolution", Resolution);
         Row("upscaling", Upscaling);
         Row("sharpness", Sharpness);
+        Row("upscaler_sharpness", UpSharpness);
         Row("game_speed", GameSpeed);
         Row("handheld_profile", Handheld);
         Row("ultrawide", Ultrawide);
         Row("fps_counter", FpsCounter);
         Row("dlss", Upscaler);
+        Row("pacing_rev", 1);
+        Row("fsr_version", FsrVersion);
+        Row("menu_look", MenuLook);
         foreach (var (k, v) in other) g.Append(k).Append('=').Append(v).Append('\n');
         File.WriteAllText(GameIni, g.ToString());
 

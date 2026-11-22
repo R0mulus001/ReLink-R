@@ -6,11 +6,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <string>
 #include <thread>
 #include <vector>
@@ -83,6 +85,36 @@ void logf(const char* fmt, ...) {
     if (host) host->log(b);
 }
 
+#ifdef _WIN32
+// (relink) The renderer's C++ allocations at Windows' commit limit (RAM plus page file). An operator new that malloc refused
+// calls this each time and tries again when it returns; before, the refusal was a std::bad_alloc that nothing caught (exception
+// 0x20474343 in the renderer's DLL, the game closing at once). With the commit nearly all used it now waits 50 ms and lets the
+// allocation try again, for up to 5 s on a thread (a refusal more than 250 ms after the last one starts a new 5 s), then says
+// "out of memory" in the log and throws as before. A refusal with plenty of commit left is not the limit (a size gone wrong, as
+// a bad shader's): the std::bad_alloc at once, for the catch that holds it. The textures give back their memory on the replay
+// thread through the budget (vk_texture.cpp's commit headroom), not from here: this may run on any thread. RX_VK_NEW_WAIT=0: off
+static void new_refused() {
+    using clock = std::chrono::steady_clock;
+    static thread_local clock::time_point first, last;
+    static std::atomic<int> told{0};
+    const clock::time_point now = clock::now();
+    if (last == clock::time_point() || now - last > std::chrono::milliseconds(250)) first = now;
+    last = now;
+    MEMORYSTATUSEX m = {};
+    m.dwLength = sizeof m;
+    const long long left = GlobalMemoryStatusEx(&m) ? (long long)(m.ullAvailPageFile >> 20) : -1;
+    if (left < 0 || left > 4096) throw std::bad_alloc();
+    if (now - first >= std::chrono::seconds(5)) {
+        logf("mem: out of memory: the renderer's C++ allocations are still refused after 5 s at the commit limit (%lld MB of commit left): "
+             "close other programs, or let Windows manage the page file size", left);
+        throw std::bad_alloc();
+    }
+    if (told.fetch_add(1) < 8)
+        logf("vk: a C++ allocation refused at the commit limit (%lld MB of commit left): tried again for up to 5 s", left);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+#endif
+
 // (relink) HDR output: VK_EXT_swapchain_colorspace enabled on the instance (the player asked for HDR and the loader has it), and
 // whether the swapchain now is HDR10 (A2B10G10R10, ST 2084) with the display's peak in nits (hdr_output, hdr_peak_nits)
 bool hdr_ext = false;
@@ -99,6 +131,23 @@ namespace {
 // takes a null module for a failed program), logged with the SPIR-V kept beside the game for us (the first two), and said once in
 // a box, with what it likely means on a GPU below the minimum. RX_VK_NO_MODULE_GUARD=1: the driver's pointer as before
 bool amd_gcn = false;   // (an AMD GPU with only 64-lane subgroups and no mesh shaders: GCN, RX 400 / 500 / Vega; create_device)
+// (relink, issues 45 66 79 123 130) RX 6000 cards (RDNA 2) lose the device or time out in play, with AMD's Windows driver and
+// with RADV alike, and every hang report names task + mesh draws as the work in flight. Those chips draw them through the compute
+// fallback by default (the GTX 10 and RX 5000 path). What is known: on an RX 6800 XT with RADV the native path hung in 13 runs
+// of 13 and the fallback ran two sessions of 100 to 140 s without a hang (issue 79, 0.7.9.1); with AMD's Windows driver nobody
+// has run the fallback yet. It costs frame rate (not measured: no AMD card on the bench).
+// FLIP THIS to false to give the native mesh shaders back by default. RX_VK_FORCE_MESH_FALLBACK=1 / =0 decide over it either way
+constexpr bool kMeshFallbackOnAmdNavi2x = true;
+/// Navi 21 (RX 6800 / 6900 / 6950 and Pro), Navi 22 (RX 6700) and Navi 23 (RX 6600) device ids; Navi 24 (RX 6400 / 6500 XT) is left out
+static bool amd_navi2x_mesh_fallback(uint32_t vendor, uint32_t device) {
+    if (vendor != 0x1002) return false;
+    switch (device) {
+    case 0x73bf: case 0x73af: case 0x73a5: case 0x73a1: case 0x73a2: case 0x73a3: case 0x73ab: case 0x73ae:   // Navi 21
+    case 0x73df:                                                                                               // Navi 22
+    case 0x73e0: case 0x73e1: case 0x73e3: case 0x73ef: case 0x73ff: return true;                               // Navi 23
+    default: return false;
+    }
+}
 #ifdef _WIN32
 PFN_vkCreateShaderModule driver_create_shader_module = nullptr;
 std::atomic<int> module_faults{0};
@@ -352,7 +401,18 @@ bool create_device() {
     };
     // (RX_VK_FORCE_MESH_FALLBACK=1, a test: mesh shaders not used where they are, so the no-mesh fallback the GTX 10xx and RX 5000
     // cards run (issue 640) can be tried on any GPU)
-    if (getenv("RX_VK_FORCE_MESH_FALLBACK") && atoi(getenv("RX_VK_FORCE_MESH_FALLBACK")) != 0) dev.mesh_shader = false;
+    bool force_fallback = false;
+    // (relink, RX_VK_MESH_FALLBACK_TASK_ONLY=1) a finer rule than the whole fallback: the GPU keeps its mesh shaders, and only the
+    // programs with a task stage run as compute (create_device below; vk_shader.cpp's mesh_program_locked picks per program). An
+    // explicit RX_VK_FORCE_MESH_FALLBACK still decides over it
+    const bool task_only = getenv("RX_VK_MESH_FALLBACK_TASK_ONLY") && atoi(getenv("RX_VK_MESH_FALLBACK_TASK_ONLY")) != 0;
+    force_fallback = kMeshFallbackOnAmdNavi2x && !task_only && amd_navi2x_mesh_fallback(dev.props.vendorID, dev.props.deviceID);
+    const char* force_env = getenv("RX_VK_FORCE_MESH_FALLBACK");
+    if (force_fallback && !force_env)
+        logf("vk: AMD RDNA 2 (device %#x): task and mesh programs run as compute shaders, as these cards stop in the driver's mesh "
+             "path (RX_VK_FORCE_MESH_FALLBACK=0: the driver's mesh shaders)", (unsigned)dev.props.deviceID);
+    if (const char* e = getenv("RX_VK_FORCE_MESH_FALLBACK")) force_fallback = atoi(e) != 0;   // (the switch decides both ways)
+    if (force_fallback) dev.mesh_shader = false;
     else optional(VK_EXT_MESH_SHADER_EXTENSION_NAME, dev.mesh_shader);
     optional(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME, dev.external_memory_host);
     optional(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, dev.external_memory_fd);   // (guest memory as udmabufs: vk_memory.cpp import_dma_buf)
@@ -495,6 +555,7 @@ bool create_device() {
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
     if (dev.coop_matrix) *tail = &coop, tail = &coop.pNext;
     reflex_device_features(tail);   // (present ids, when NVIDIA Reflex's extensions are there)
+    fsr_device_features(tail);      // (relink: FSR 4's FP8 and compute-derivative features, where the GPU has them: vk_fsr.cpp)
     VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR ucf{
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_UNIFORM_CONTROL_FLOW_FEATURES_KHR};
     VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR maxr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_MAXIMAL_RECONVERGENCE_FEATURES_KHR};
@@ -592,6 +653,8 @@ bool create_device() {
     // (relink, issue 640) RDNA1 and older GPUs: no mesh shaders, but task and mesh programs run as compute shaders
     // that write their vertices to buffers, drawn through an ordinary graphics pipeline. It needs buffer device addresses.
     dev.mesh_fallback = !dev.mesh_shader && f12.bufferDeviceAddress && !getenv("RX_VK_NO_MESH_FALLBACK");
+    dev.task_mesh_fallback = task_only && dev.mesh_shader && f12.bufferDeviceAddress && !getenv("RX_VK_NO_MESH_FALLBACK");
+    if (dev.task_mesh_fallback) logf("vk: native mesh shaders; the programs with a task stage run as compute shaders (RX_VK_MESH_FALLBACK_TASK_ONLY)");
     if (dev.mesh_fallback) logf("vk: no mesh shaders: task and mesh programs run as compute shaders (issue 640 fallback)");
     if (amd_gcn && !dev.mesh_shader)   // (relink, issue 43)
         logf("vk: an AMD GCN GPU (Radeon RX 400 / 500 series or Vega: 64-lane subgroups only, no mesh shaders): below what ReLink "
@@ -1027,6 +1090,9 @@ void prepare_with_screen() {
             prep_stage.store(1);
             predict_run(prep_progress);
         }
+        // (relink, issue 97) an update builds the shipped state list's pipelines too, as the start without a screen does below:
+        // without them the pipelines a scene needs first (Link in water) were built in play, and their draws left out meanwhile
+        if (update && !prepare_stopped()) state_list_run();
         if (!prepare_stopped()) {
             prep_done.store(0), prep_total.store(0);
             prep_stage.store(2);
@@ -1322,6 +1388,9 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
     using namespace mkwvk;
     if (!h || h->version != MKWVK_API_VERSION) return nullptr;
     host = h;
+#ifdef _WIN32
+    if (!getenv("RX_VK_NEW_WAIT") || atoi(getenv("RX_VK_NEW_WAIT")) != 0) std::set_new_handler(new_refused);   // (new_refused, above)
+#endif
     if (!load_global()) {
         logf("vk: vulkan-1.dll not found");
         return nullptr;
@@ -1361,7 +1430,10 @@ HWND app_window() { return main_window; }   // (relink: the Insert menu's Fullsc
 // the frame counter), and players took it for a load that never ends: "black screen after the intro, waited a long time".
 // Said once, in the log in plain words and in a box on its own thread (the replay goes on to write its report); the game is
 // left running so the log keeps what follows
+std::atomic<bool> device_lost_seen{false};
+bool device_was_lost() { return device_lost_seen.load(std::memory_order_relaxed); }
 void device_lost_notice() {
+    device_lost_seen = true;
     logf("vk: THE GRAPHICS CARD STOPPED (device lost): the picture stays black until the game is started again. "
          "Please send relink_log.txt with a report");
 #ifdef _WIN32

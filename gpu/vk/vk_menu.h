@@ -25,24 +25,36 @@ enum { HOS_OPT_KEY_FULLSCREEN = 73 };
 // (out of the box every feature is off: what the game does on its own. The ini beside the executable keeps a player's choices)
 struct Options {
     int framegen = 0;     // made frames: 0 off, or 2, 3, 4 times the game's frames
-    int pace = 0;         // frames shown on an even line (vk_framegen.cpp)
+    int fg_kind = 0;      // (relink, 0.7.9.3) what makes them (the Frame generator row, saved as frame_generator): 0 ReLink's own
+                          // (vk_framegen.cpp), 1 NVIDIA DLSS Frame Generation where it runs (vk_dlss.cpp dlssg_generate)
+    int pace = 1;         // frames shown on an even line (vk_framegen.cpp; (relink, 0.7.9.3) on by default: it paces the
+                          // game's frames alone too, and an options file from before, where it did nothing without frame
+                          // generation, gets it once: vk_menu.cpp pacing_rev)
     int vsync = 0;        // (relink) V-Sync: 0 off (mailbox where the driver has it, else immediate, which can tear), 1 on
                           // (FIFO: every frame waits for the display's refresh; vk_main.cpp make_swapchain)
     // (relink: 1 by default, the 3D at the picture's size. Auto ran at 1536 x 864 and below for a 2048 x 1152 picture)
     int resolution = 1;   // the 3D's (Render resolution): 0 Auto (the game's dynamic resolution), else a share of the output,
                           // 1..6 = 100%, 75%, 67%, 50%, 58%, 33% (upscaler_rows.h; nx2/oot_patches.py)
-    int output_res = 0;   // the game's whole frame, docked: 0 its 2048x1152, 1 2560x1440, 2 3840x2160, 3 1920x1080; read once, at the start (host/nn_applet.c)
+    int output_res = 4;   // the game's whole frame, docked: 0 its 2048x1152, 1 2560x1440, 2 3840x2160, 3 1920x1080, 4 Auto (the default: the largest that fits the screen, up to 2560x1440); read once, at the start (host/nn_applet.c)
     int upscale = 0;      // to the window (Window scaling filter, saved as upscaling): 0 off (the plain copy), 1 Catmull-Rom, 2 Lanczos
     int reflex = 0;       // NVIDIA Reflex: 0 off, 1 on, 2 on + boost (vk_reflex.cpp; NVIDIA GPUs with VK_NV_low_latency2)
     int dlss = 0;         // the Upscaler: 0 the game's own network, 1 NVIDIA DLSS, 2 NVIDIA DLAA (vk_dlss.cpp; a build with NVIDIA's
                           // SDK only). Saved as dlss
     int dlss_model = 0;   // DLSS's network, by its preset: 0 K (transformer), 1 M, 2 L (second-generation transformer), 3 NVIDIA's
                           // default (upscaler_rows.h model_preset; vk_dlss.cpp). RX_VK_DLSS_PRESET over it
-    int sharpness = 0;    // 0 to 100
+    int fsr_version = 0;  // (relink) AMD FSR's version: 0 Auto (the newest AMD's runtime makes on this GPU: FSR 4 on the RX 6000
+                          // series and later), 1 FSR 3.1 (vk_fsr.cpp; vk_dlss.cpp make_fsr). Saved as fsr_version
+    int sharpness = 0;    // 0 to 100: the game's own upscaler (the window's pass) and Upscaler None
+    // (relink, 0.7.9.3) the Sharpness row while DLSS, DLAA or FSR draws (saved as upscaler_sharpness): their picture under the
+    // HUD sharpened by dlss_out.comp. 40 by default: measured in the Market at 1920x1080 (relink_release upscaler_best_TASKS.md,
+    // the mean luma step between neighbours), the 3D drawn at 3840x2160 and averaged down 7.3, the game's own upscaler 9.1 to
+    // 9.8; DLSS from the game's composite before its SMAA (vk_dlss.cpp upscale_input) 6.9 unsharpened, 7.6 at 30 %, 9.2 at 40 %,
+    // 10.2 at 50 %; FSR 6.4, 8.4, 8.8; DLAA 8.8 at 30 %. An options file without it gets 40 too (vk_menu.cpp menu_init)
+    int up_sharpness = 40;
     int realtime = 1;     // game time follows the clock (host/nn_vi.c); 0: per frame (slower frames, slower game)
     int handheld = 0;     // the game's handheld profile: ~4 fps, softer; read once, at the start (host/nn_applet.c)
     int ultrawide = 0;    // the camera at the monitor's shape when it is wider than 16:9; read once, at the start (host/hos_main.c)
-    int show_fps = 0;
+    int show_fps = 0;     // the counter: 0 off, 1 the frame rate, 2 detailed (frame times, 1% low, GPU, CPU, memory). Saved as fps_counter
     int fullscreen = 0;   // borderless, at the monitor's size: F11 is the same setting
     int hdr = 0;          // (relink) HDR output: the game's own HDR picture in HDR10, when Windows' HDR is on for the display;
                           // read once, at the start (vk_main.cpp hdr_output; RX_VK_HDR over it)
@@ -80,6 +92,8 @@ struct Options {
     int mic = 1;          // (relink) the ocarina's microphone: 0 Off, 1 the system's default, 2.. a device as host->mic_name lists it (host/nn_audio_in.c)
     int framerate = 0;    // 0: the game's 60 fps; 1: unlocked, up to the display's refresh, game time following the clock (host/nn_vi.c)
     int item_wheel = 0;   // (relink) R or L held shows the item row as a wheel (host/oot_wheel.c, vk_wheel.cpp); HOS_ITEM_WHEEL over it
+    int menu_dark = 0;    // (relink) the menu's look (Menu look, saved as menu_look): 0 light, 1 dark (vk_menu.cpp cart::set_look;
+                          // the launcher's look row writes it too: launcher/Settings.cs)
     int cycle_items = 0;  // (relink) a tap of R or L changes the ZR item: 0 off (the default: R and L as the game has them),
                           // 1 Last used (the item on ZR before this one), 2 Basic, 3 +Bombs, 4 +Tools (within the ZR item's
                           // group; host/oot_wheel.c cycle_level)

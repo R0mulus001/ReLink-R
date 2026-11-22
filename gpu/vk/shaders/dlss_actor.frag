@@ -34,5 +34,5 @@ void main() {
     const vec2 then = before.xy / before.w;
     const vec2 px = vec2(then.x - now.x, now.y - then.y) * 0.5 * size;
     if (!all(lessThan(abs(px), vec2(16384.0)))) discard;
-    motion = px;
+    motion = (pc.formats & 16u) != 0u ? vec2(48.0, 0.0) : px;   // (16: RX_VK_DLSS_ACTOR_MARK, the pixels it covers shown)
 }

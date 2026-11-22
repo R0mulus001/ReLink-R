@@ -5,6 +5,7 @@
 // its fragment module had (else those most programs with its outputs had). One pipeline for each pair of what it takes, with the
 // state of the first note that had each part
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -91,10 +92,19 @@ std::vector<Class> candidates(const Seen* exact, const Seen* sig) {
 
 } // namespace
 
-std::vector<std::unique_ptr<PipeNote>> predict_pipelines(const std::vector<std::unique_ptr<PipeNote>>& notes, size_t* programs) {
+std::vector<std::unique_ptr<PipeNote>> predict_pipelines(const std::vector<std::unique_ptr<PipeNote>>& notes, size_t* programs,
+                                                          size_t* too_big) {
     std::unordered_map<std::pair<uint64_t, uint64_t>, Face, PairHash> faces;
+    // (relink) A few giant programs (1000k and 500k words of SPIR-V) kept the driver's compiler busy for minutes and past 10 GB of
+    // commit, and a compile in hand cannot be interrupted: programs over RX_VK_PREDICT_MAX_KWORDS thousand words (300 by default;
+    // 0: no limit) are left to the draw that needs them
+    static const uint64_t max_kwords = getenv("RX_VK_PREDICT_MAX_KWORDS") ? strtoull(getenv("RX_VK_PREDICT_MAX_KWORDS"), nullptr, 10) : 300;
+    std::unordered_set<std::pair<uint64_t, uint64_t>, PairHash> giants;
     program_cache_each([&](const KeptProgram& k) {
         Face f;
+        uint64_t words = 0;
+        for (const auto& st : k.stages) words += st.second.size();
+        if (max_kwords && words / 1000 > max_kwords) giants.insert({k.key, k.variant});
         for (const auto& [stage, spirv] : k.stages) {
             const uint64_t h = fnv(spirv.data(), spirv.size() * 4);
             if (stage == VK_SHADER_STAGE_VERTEX_BIT) f.vs = h, f.vs_locs = spirv_locations(spirv, 1);
@@ -124,6 +134,10 @@ std::vector<std::unique_ptr<PipeNote>> predict_pipelines(const std::vector<std::
     *programs = 0;
     for (const auto& [pv, f] : faces) {
         if (noted.count(pv)) continue;
+        if (giants.count(pv)) {
+            if (too_big) (*too_big)++;
+            continue;
+        }
         const std::vector<Class> vc = candidates(find(vh, f.vs), find(vsig, f.vs_locs));
         const std::vector<Class> oc = candidates(find(fh, f.fs), find(fsig, f.fs_locs));
         if (vc.empty() || oc.empty()) continue;

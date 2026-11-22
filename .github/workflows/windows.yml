@@ -63,7 +63,7 @@ jobs:
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             tag=$GITHUB_REF_NAME
           else
-            tag=$(git describe --tags --match 'v[0-9]*' 2>/dev/null || echo "v0.0.0-$(git rev-parse --short HEAD)")
+            tag=$(git describe --tags --match 'v0.0.*' 2>/dev/null || echo "v0.0.0-$(git rev-parse --short HEAD)")
           fi
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
@@ -208,6 +208,14 @@ jobs:
           OOT_WORK="$RUNNER_TEMP/vk-work" RX_CPM="$GITHUB_WORKSPACE/_deps/cpm" \
             python -I nx2/build.py --standalone --jobs "$NUMBER_OF_PROCESSORS"
           ls -l "$RUNNER_TEMP/vk-work/sa/build/relink_vk.dll"
+      # (a pull request's test build: the back end in the log too, base64 between markers, to be tried in a game folder without
+      # the artifact's storage host)
+      - name: relink_vk.dll in the log
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "=====BEGIN relink_vk.dll"
+          base64 -w 4000 "$RUNNER_TEMP/vk-work/sa/build/relink_vk.dll"
+          echo "=====END"
 
   release:
     name: Release files

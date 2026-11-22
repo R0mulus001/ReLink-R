@@ -25,5 +25,15 @@ inline bool frag_nan_guard = false;
 // the colour pass is then rejected in spots: holes showing the bright sky, blown up by bloom (the glowing flowers).
 // On for every card but NVIDIA (vk_coopmat.cpp); RX_VK_NO_INVARIANT=1 off. From NX2navi patch 0007.
 inline bool position_invariant = false;
+// (relink) An out-of-bounds texel fetch from an image answers zero, as NVIDIA's GPUs answer it, rather than whatever the host's
+// driver does (EmitImageFetch, FetchInBounds): Vulkan leaves it undefined without robustImageAccess, and on AMD the ground fog's
+// depth reads at points projected off screen drew a pale box at the screen's edges. Every card but NVIDIA (vk_coopmat.cpp);
+// RX_VK_FETCH_BOUNDS=0/1 forces it. fetch_bounds_buffers: texel buffers too, only without robustBufferAccess2 (which answers
+// their out-of-bounds reads with zero already)
+inline bool fetch_bounds = false;
+inline bool fetch_bounds_buffers = false;
+// (relink) isnan tested on the value's bits (IsNan, emit_spirv_floating_point.cpp), not OpIsNan, for AMD's proprietary shader
+// compiler on RDNA 1/2 (driverInfo names it), which can let a NaN test fail: black and white blocks. RX_VK_NAN_BITS=0/1 forces it
+inline bool nan_bits = false;
 
 } // namespace Shader::Backend::SPIRV

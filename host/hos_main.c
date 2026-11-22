@@ -96,6 +96,37 @@ static void process_priority(void) {
         hos_log("GPU scheduling class: %s (%s)", glevel >= 2 ? "high" : "above normal", st == 0 ? "set" : "refused");
     }
 }
+
+/* (relink) A floor under the game's working set. On a 16 GB PC the game alone pages (available RAM ~0.9 GB, up to 14 000 page
+   reads a second, bench 20/11); with another program holding 3 GB (touching it every 2 s), Windows trimmed the game's working
+   set to 0.8-1 GB in Hyrule Field: 49, 53 and 12 frames shown late in 65 s against 2, 3 and 3 with a soft minimum of 6 GB
+   (alternated runs); the Market 41, 48, 31 against 34, 36, 21. (The longest frames, 250-580 ms against ~30, came with a burst
+   of ~700 texture uploads ~34 s into the Field that some runs had and others not: not claimed for the minimum.) A soft minimum (QUOTA_LIMITS_HARDWS_MIN_DISABLE) is a target the memory manager trims the game down to
+   only when memory is short, not a lock: other programs are trimmed first.
+   OFF BY DEFAULT: where the memory is really short it LOSES THE GPU. Bench, RAM taken away by a program that locks it (never
+   paged, as memory nothing can give back): 8 GB locked, a 3 GB minimum: 2 runs of 2 lost the GPU ("submit failed (-4)") or
+   stopped; 5 GB locked, a 6 GB minimum (what the default was on 16 GB): 2 of 2 lost the GPU; without the minimum 0 of 6, as
+   badly as they stuttered. HOS_WS_MIN_MB=<n>: that many MB, for a PC known to have room (0 or unset: none) */
+static void working_set_floor(void) {
+    MEMORYSTATUSEX ms = {sizeof ms};
+    const uint64_t ram_mb = GlobalMemoryStatusEx(&ms) ? ms.ullTotalPhys >> 20 : 0;
+    const char *e = getenv("HOS_WS_MIN_MB");
+    const uint64_t mb = e ? (uint64_t)atoll(e) : 0;
+    if (!mb || mb >= ram_mb) return;
+    HANDLE tok;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok)) {   /* (raising the minimum needs it) */
+        TOKEN_PRIVILEGES tp = {1};
+        if (LookupPrivilegeValueA(NULL, "SeIncreaseWorkingSetPrivilege", &tp.Privileges[0].Luid)) {
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
+        }
+        CloseHandle(tok);
+    }
+    const SIZE_T lo = (SIZE_T)(mb << 20), hi = (SIZE_T)((mb + 4096) << 20);
+    const BOOL ok = SetProcessWorkingSetSizeEx(GetCurrentProcess(), lo, hi, QUOTA_LIMITS_HARDWS_MIN_DISABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE);
+    hos_log("working set: a soft minimum of %llu MB (of %llu MB of RAM; HOS_WS_MIN_MB=0: none): %s", (unsigned long long)mb,
+            (unsigned long long)ram_mb, ok ? "set" : "refused");
+}
 #endif
 
 int hos_game_is_mkw(void) { return !strcmp(hos_main_build_id, "d00e4f399e411d0613aa8d26b1c02fef"); }
@@ -427,6 +458,7 @@ static void load_relink_env(void) {
 
 int hos_oot_protect_hearts;
 volatile int hos_oot_live_action;   /* (test runs) the live input file's "!cheat <action>": host/nn_hid.c */
+char hos_oot_live_event[96];        /* (test runs) the live input file's "!event <name>": oot_teleport asks for that event */
 /* (test runs) the live input file's "!pos x y z": Link moved there, as the mark and return cheats move him (actions 2, 3) */
 volatile int hos_oot_live_pos_pending;
 volatile float hos_oot_live_pos[3];
@@ -810,7 +842,7 @@ static int oot_teleport(Ctx *c, uint64_t actor, unsigned index) {
     memcpy(A64_PTR(strings + 128), start, strlen(start) + 1);
     memcpy(A64_PTR(strings + 256), boot, strlen(boot) + 1);
 
-    const char *event_env = getenv("HOS_OOT_TELEPORT_EVENT");
+    const char *event_env = hos_oot_live_event[0] ? hos_oot_live_event : getenv("HOS_OOT_TELEPORT_EVENT");
     const int carrier = place_target.banc && place_target.carrier;
     const char *event = carrier ? "DefaultParentEvent" : event_env && *event_env ? event_env : "Dm_SY_BancChangeGo";
     const char *starter_env = getenv("HOS_OOT_TELEPORT_STARTER");
@@ -1396,7 +1428,7 @@ static int narrow_paths_ok(int argc, char **argv) {
         wchar_t text[MAX_PATH * 2 + 640];
         _snwprintf(text, sizeof text / sizeof text[0],
                    L"ReLink can't open its files in this folder:\n\n%ls\n\n"
-                   L"%ls\n\nMove the game folder somewhere with a shorter name of plain letters and digits (for example C:\\Games\\ReLink), "
+                   L"%ls\n\nMove the game folder somewhere with a shorter name of plain letters and digits (for example C:\\Games\\ReLink-R), "
                    L"or update Windows.",
                    w, GetACP() == CP_UTF8 ? L"The path is too long."
                                           : L"Its name has characters this Windows can only give the game from Windows 10 version 1903 on.");
@@ -1617,6 +1649,7 @@ static int game_main(int argc, char **argv) {
     timeBeginPeriod(1);   /* 1 ms timer resolution: the 60 Hz vsync and the game's frame pacing sleep in short steps */
     no_power_throttling();
     process_priority();
+    working_set_floor();
 #endif
     void hos_display_start(void);
     hos_display_start();  /* the game's window; HOS_HEADLESS=1 for none */

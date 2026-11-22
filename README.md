@@ -5,6 +5,13 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.4-dev** (on top of upstream 0.7.9.3): everything upstream 0.7.9.3 brings, among it frame pacing on by default (the
+  game's frames shown evenly, no frame generation), faster locks between the game's threads, the detailed FPS counter, FSR 4
+  and DLSS/DLAA/FSR's own Sharpness; ReLink-R keeps its one look (upstream's light/dark rows are not shown). ReLink-R is always
+  an install of its own: it never plays, updates nor builds into a folder holding Project ReLink's game (it builds into
+  Games\ReLink-R, or a ReLink-R folder beside a Project ReLink folder that was picked), and a 0.0.3-dev game folder named
+  ReLink is renamed ReLink-R. The Vulkan back end leaves out a compute barrier where the two dispatches touch nothing in
+  common (`RX_VK_DISPATCH_HAZARDS=0` turns it off).
 - **0.0.3-dev**: the look of the approved drafts, put together: the sword beside the launcher's name; the pages' titles on
   the panel instead of on strips of colour, the options' pages and their choices as rounded pills with the chosen one in gold,
   Home's cards with one thin edge, the links one readable violet; the install's number in gold over a sword lying down, its
@@ -101,7 +108,7 @@ folder, from the game files the folder keeps: your `.nup` is not needed again. S
 
 ### Where the files go
 
-- The game: the folder you choose (`Games\ReLink` in your user folder by default). Your copy is never changed.
+- The game: the folder you choose (`Games\ReLink-R` in your user folder by default), always its own folder: ReLink-R never plays, updates nor installs into a folder holding Project ReLink's game, so both can be installed side by side. Your copy is never changed.
 - ReLink itself: `%LOCALAPPDATA%\ReLink`. The build files (about 4 GB) are deleted once the game is ready.
 - To uninstall: delete the game folder, `%LOCALAPPDATA%\ReLink` and the shortcuts.
 
@@ -115,10 +122,12 @@ screenshot: the game's picture at its output resolution, without the menu or the
 `screenshots` folder (a line over the game says where). These three keys can be changed in the menu's Gameplay tab
 (**Menu key**, **Screenshot key**, **Fullscreen key**: F1 to F12, Insert, Pause or Scroll Lock).
 
-**Upscaler** (since 0.7): what scales the 3D up to the screen. The game's own network by default; **AMD FSR 3.1** on any
-graphics card (AMD's library comes with ReLink); or **NVIDIA DLSS / DLAA** on an RTX card, after turning on **NVIDIA DLSS** on
+**Upscaler** (since 0.7): what scales the 3D up to the screen. The game's own network by default; **AMD FSR 4**, AMD's network,
+on a Radeon RX 6000 or newer with a recent driver, and **AMD FSR 3.1** on any graphics card (AMD's DLLs come with ReLink; the
+**FSR version** row chooses between them); or **NVIDIA DLSS / DLAA** on an RTX card, after turning on **NVIDIA DLSS** on
 the launcher's Display page: that builds the game again with NVIDIA's DLSS SDK, downloaded from NVIDIA under NVIDIA's license.
-With FSR or DLSS, set Sharpness to about 80 %. The frame rates below are measured without them.
+With FSR or DLSS, Sharpness has its own value, 40 % by default (about as crisp as the game's own upscaler). The frame rates
+below are measured without them.
 
 The launcher is in English; French is one click away on its Game page. An Xbox controller or any XInput controller works,
 and so do keyboard and mouse (the keys are listed on the Controls page). Since 0.6.2 the install also brings SDL, which the
@@ -277,8 +286,8 @@ Only a new dump of the game brings the real files back.
 Two tools in this repository do it by hand, from your own files (nothing of the game is in them):
 
 ```powershell
-python -I tools/dump_check.py "C:\Games\ReLink\romfs\Tex"
-python -I tools/dump_repair.py "C:\Games\ReLink\romfs" "C:\Games\ReLink\mods\00-dump-repair"
+python -I tools/dump_check.py "C:\Games\ReLink-R\romfs\Tex"
+python -I tools/dump_repair.py "C:\Games\ReLink-R\romfs" "C:\Games\ReLink-R\mods\00-dump-repair"
 ```
 
 The first counts the damaged files; the second writes the mod, and needs no rebuild: the game reads mods when it starts.
@@ -322,8 +331,8 @@ game is never changed. `relink_exefs_mods.txt` in the game folder lists what the
 For developers. The launcher runs the same script, `nx2/make_game.py`.
 
 ```powershell
-python -I nx2/make_game.py --nup "C:\path\your-game.nup" --out "C:\Games\ReLink" --language en-US
-python -I nx2/make_game.py --romfs "C:\path\romfs" --exefs "C:\path\exefs" --out "C:\Games\ReLink" --language en-US
+python -I nx2/make_game.py --nup "C:\path\your-game.nup" --out "C:\Games\ReLink-R" --language en-US
+python -I nx2/make_game.py --romfs "C:\path\romfs" --exefs "C:\path\exefs" --out "C:\Games\ReLink-R" --language en-US
 ```
 
 `--game <path>` takes either one (a `.nup`, or a folder holding `exefs` and `romfs`) in place of those options.
@@ -377,10 +386,12 @@ d'installer quoi que ce soit.
 4. Appuyez sur **Install**. Comptez 10 à 45 minutes selon le processeur ; le PC reste utilisable.
 5. Appuyez sur **Play**. Le lanceur est en anglais par défaut ; le français se choisit dans sa page Game.
 
-**Upscaler** (depuis la 0.7) : ce qui agrandit la 3D jusqu'à l'écran. Le réseau du jeu par défaut ; **AMD FSR 3.1** sur toutes
-les cartes graphiques (la bibliothèque d'AMD est livrée avec ReLink) ; ou **NVIDIA DLSS / DLAA** sur une carte RTX, après avoir
+**Upscaler** (depuis la 0.7) : ce qui agrandit la 3D jusqu'à l'écran. Le réseau du jeu par défaut ; **AMD FSR 4**, le réseau
+d'AMD, sur une Radeon RX 6000 ou plus récente avec un pilote récent, et **AMD FSR 3.1** sur toutes les cartes graphiques (les DLL
+d'AMD sont livrées avec ReLink ; la ligne **FSR version** choisit entre les deux) ; ou **NVIDIA DLSS / DLAA** sur une carte RTX, après avoir
 activé **NVIDIA DLSS** dans la page Display du lanceur : le jeu est reconstruit avec le SDK DLSS, téléchargé chez NVIDIA sous
-la licence de NVIDIA. Avec FSR ou DLSS, mettez la netteté vers 80 %.
+la licence de NVIDIA. Avec FSR ou DLSS, la netteté a sa propre valeur, 40 % par défaut (à peu près aussi net que l'agrandissement
+du jeu).
 
 **Roue d'objets** (depuis la 0.7.8, menu Insert, onglet Gameplay, éteinte par défaut) : maintenir R ou L montre vos objets
 en roue au lieu de la rangée du jeu ; visez-en un au stick et relâchez pour le mettre sur ZR, Gauche et Droite tournent les

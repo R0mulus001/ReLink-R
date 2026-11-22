@@ -177,6 +177,8 @@ static void mkdirs(const wchar_t *path) {
 }
 
 /* a folder and everything in it (a version folder, a half-unpacked one) */
+/* (0.7.9.3) the first file a removal could not delete: named to the player when a version cannot be replaced */
+static wchar_t g_stuck[MAX_PATH];
 static void rmtree(const wchar_t *dir) {
     wchar_t pat[MAX_PATH], p[MAX_PATH];
     WIN32_FIND_DATAW fd;
@@ -188,7 +190,10 @@ static void rmtree(const wchar_t *dir) {
             swprintf(p, MAX_PATH, L"%ls\\%ls", dir, fd.cFileName);
             if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) rmtree(p);
             else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) RemoveDirectoryW(p);   /* (a link: never what it points to) */
-            else SetFileAttributesW(p, FILE_ATTRIBUTE_NORMAL), DeleteFileW(p);
+            else {
+                SetFileAttributesW(p, FILE_ATTRIBUTE_NORMAL);
+                if (!DeleteFileW(p) && !g_stuck[0] && GetLastError() != ERROR_FILE_NOT_FOUND) wcscpy(g_stuck, p);
+            }
         } while (FindNextFileW(h, &fd));
         FindClose(h);
     }
@@ -531,7 +536,22 @@ static DWORD WINAPI work(LPVOID unused) {
         /* (unpacked into <tag>.part and renamed once complete: a setup stopped half way never leaves a version that looks installed) */
         swprintf(install, MAX_PATH, L"%ls\\%ls.part", versions, wtag);
         rmtree(install);
+        g_stuck[0] = 0;
         rmtree(final_dir);
+        /* (0.7.9.3, a Discord report of 19/11: Repair after a build that failed on a damaged compiler file downloaded and
+           unpacked everything, then ended on "Could not finish installing into ...": the version's folder was still there,
+           one of its files in use (the builder or one of its tools not closed yet, an error window left open), and the new
+           one could not take its place. Waited for, ten seconds, then said at once and with the file's name) */
+        for (int i = 0; i < 10 && GetFileAttributesW(final_dir) != INVALID_FILE_ATTRIBUTES; i++) {
+            status(L"Waiting for the installed version's files to be free...");
+            Sleep(1000);
+            g_stuck[0] = 0;
+            rmtree(final_dir);
+        }
+        if (GetFileAttributesW(final_dir) != INVALID_FILE_ATTRIBUTES)
+            fail(L"The installed version cannot be replaced: a file in it is still in use.\n\n%ls\n\nClose ReLink, the game and any "
+                 L"error window left open (one of ReLink's tools may still be running), or restart Windows, then run the setup "
+                 L"again.", g_stuck[0] ? g_stuck : final_dir);
         mkdirs(install);
         for (int i = 0; i < nparts; i++) {
             Part *p = &parts[i];

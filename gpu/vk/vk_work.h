@@ -10,7 +10,11 @@
 
 namespace mkwvk {
 extern std::atomic<uint64_t> work_epoch;   // (vk_texture.cpp)
+// (ReLink-R 0.0.4) this thread's own count of the same commands: RX_VK_DISPATCH_HAZARDS (vk_draw.cpp) asks whether the thread
+// recorded anything between two dispatches, which the shared count cannot say while other threads record their own work
+inline thread_local uint64_t thread_work = 0;
 inline void note_work() {
+    thread_work++;
     // (an add, not a load and a store: a thread preempted between the two would store a stale count over another thread's, which could
     // make the count equal the one a barrier was recorded at with work recorded since, and the next barrier is left out for it)
     work_epoch.fetch_add(1, std::memory_order_relaxed);

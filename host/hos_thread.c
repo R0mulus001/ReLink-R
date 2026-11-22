@@ -155,12 +155,47 @@ static int log_take_locked(char **out) {
     return n;
 }
 
+/* (relink) A batch goes out in one write: stderr is unbuffered, so every line was a write of its own, 30 to 90 a second in play,
+   each one extending the log file. On a slow or nearly full disk those small writes compete with the game's own reads (its code
+   pages, its files) and stretch them: long frames. */
 static void log_write(char **lines, int n) {
-    for (int i = 0; i < n; i++) {
-        fputs(lines[i], stderr);
-        free(lines[i]);
+    size_t total = 0;
+    for (int i = 0; i < n; i++) total += strlen(lines[i]);
+    char *all = n > 1 ? (char *)malloc(total + 1) : NULL;
+    if (all) {
+        size_t at = 0;
+        for (int i = 0; i < n; i++) {
+            const size_t len = strlen(lines[i]);
+            memcpy(all + at, lines[i], len);
+            at += len;
+            free(lines[i]);
+        }
+        fwrite(all, 1, total, stderr);
+        free(all);
+    } else {   /* (one line, or no memory for the copy: line by line) */
+        for (int i = 0; i < n; i++) {
+            fputs(lines[i], stderr);
+            free(lines[i]);
+        }
     }
     fflush(stderr);
+}
+
+/* (relink) and the writer waits a little after the line it was woken for, so the lines of that time go out together. A queue
+   half full goes out at once (a full queue makes the thread that logs write the line itself). Nothing waiting is lost: the
+   crash filter, hos_fatal, the exit paths and the process's exit write the queue first (log_flush, log_drain_raw), and the
+   writer holds no lock while it waits. HOS_LOG_EACH=1: no wait, each wake's lines at once as before; HOS_LOG_BATCH_MS=<ms>
+   changes the 250 */
+enum { LOG_BATCH_FULL = 1024 };
+static DWORD log_batch_ms(void) {
+    static int ms = -1;
+    if (ms < 0) {
+        const char *each = getenv("HOS_LOG_EACH");
+        const char *e = getenv("HOS_LOG_BATCH_MS");
+        const int v = each && *each && *each != '0' ? 0 : e && *e ? atoi(e) : 250;
+        ms = v < 0 ? 0 : v > 2000 ? 2000 : v;
+    }
+    return (DWORD)ms;
 }
 
 static DWORD WINAPI log_main(void *p) {
@@ -170,6 +205,10 @@ static DWORD WINAPI log_main(void *p) {
     for (;;) {
         AcquireSRWLockExclusive(&log_lock);
         while (!log_count) SleepConditionVariableSRW(&log_cv, &log_lock, INFINITE, 0);
+        /* (log_queue wakes it at each line: until the time is up or the queue half full) */
+        const ULONGLONG until = GetTickCount64() + log_batch_ms();
+        for (ULONGLONG now; log_count < LOG_BATCH_FULL && (now = GetTickCount64()) < until;)
+            SleepConditionVariableSRW(&log_cv, &log_lock, (DWORD)(until - now), 0);
         const int n = log_take_locked(batch);
         AcquireSRWLockExclusive(&log_write_lock);
         ReleaseSRWLockExclusive(&log_lock);
@@ -489,6 +528,8 @@ static DWORD WINAPI thread_main(void *p) {
         a64_icall(c, hook);
     }
     if (hos_trace) hos_log("thread exit");
+    void hos_mxf_thread_exit(void);
+    hos_mxf_thread_exit();   /* (nn_os_sync.c: its small id back for the fast mutexes) */
     hos_vcore_away();
     return 0;
 }
@@ -691,11 +732,30 @@ int64_t hos_now_ns(void) {
 }
 
 static void sleep_ns(int64_t ns);
+/* (relink) HOS_YIELD_MODE (experiment): what a guest thread's spin-wait does to let others run. 0: SwitchToThread, which
+   hands the processor to ANY ready thread on it, of a lower priority too (another app's, a background service's) for the
+   rest of a time slice; 1: Sleep(0), which yields only to threads of the same or a higher priority (the game's own: the
+   process runs above normal), 2: a pause only. Returns nonzero when another thread ran. */
+static int yield_mode(void) {
+    static int m = -1;
+    if (m < 0) {
+        const char *e = getenv("HOS_YIELD_MODE");
+        m = e ? atoi(e) : 0;
+    }
+    return m;
+}
+static int yield_cpu(void) {
+    switch (yield_mode()) {
+    case 1: Sleep(0); return 0;
+    case 2: YieldProcessor(); return 0;
+    default: return SwitchToThread() != 0;
+    }
+}
 /* (virtual cores: a sleep gives the core up, SleepThread(0) offers it to a waiter as good) */
 void hos_sleep_ns(int64_t ns) {
     if (ns <= 0) {
         hos_vcore_yield();
-        SwitchToThread();
+        yield_cpu();
         return;
     }
     const int away = hos_vcore_away();
@@ -756,7 +816,7 @@ static void sleep_ns(int64_t ns) {
     if (ns < 1000000 && !short_timer) {
         const int sp = __atomic_load_n(&short_sleep_pause, __ATOMIC_RELAXED);
         if (sp > 0) {
-            SwitchToThread();
+            yield_cpu();
             while (hos_now_ns() < until) {
                 for (int i = 0; i < sp; i++) YieldProcessor();
             }
@@ -770,7 +830,7 @@ static void sleep_ns(int64_t ns) {
         }
 #endif
         while (hos_now_ns() < until)
-            if (!SwitchToThread()) {
+            if (!yield_cpu()) {
                 YieldProcessor();
                 for (int i = 1; i < pauses; i++) YieldProcessor();
             }
@@ -789,7 +849,7 @@ static void sleep_ns(int64_t ns) {
         }
     }
     if (ns > 2000000) Sleep((DWORD)((ns - 1000000) / 1000000));
-    while (hos_now_ns() < until) SwitchToThread();
+    while (hos_now_ns() < until) yield_cpu();
 }
 
 /* ---- nn::os threads -------------------------------------------------------------------------------------- */
@@ -861,7 +921,10 @@ HLE(_ZN2nn2os19GetCurrentStackInfoEPmS1_) {
 
 HLE(_ZN2nn2os11YieldThreadEv) {
     hos_vcore_yield();
-    SwitchToThread();
+    /* HOS_YIELD_KEEP_CPU=1 (experiment): the yield gives up the virtual core only, not the processor */
+    static int keep = -1;
+    if (keep < 0) keep = getenv("HOS_YIELD_KEEP_CPU") != NULL;
+    if (!keep) yield_cpu();
 }
 /* HOS_SLEEP_LOG=1 (diagnostic): guest sleeps by caller (LR) every 5 s: count, asked, slept */
 void hos_sleep_logged(int64_t ns, uint64_t lr) {
@@ -933,7 +996,7 @@ static int present_poll(Ctx *c, int64_t ns) {
     const int away = hos_vcore_away();
     const int64_t end = hos_now_ns() + ns;
     while (v != 1 && hos_now_ns() < end) {
-        SwitchToThread();
+        yield_cpu();
         for (int i = 0; i < 64; i++) _mm_pause();
         hos_nvn_event_value(ev, &v);
     }

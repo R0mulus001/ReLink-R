@@ -1,0 +1,60 @@
+#version 450
+// (relink, 0.7.9.3) The see-through mask for DLSS and FSR (vk_dlss.cpp dlss_scene_blended / dlss_scene_pass_end / the
+// upscale): where what the scene's blended draws (fire, smoke, particles, Navi, water) add to the solid picture changed since
+// the frame before. DLSS (its bias towards the current colour) and FSR (its reactive mask) then lean on this frame's colour
+// there instead of a history whose motion is the solid surface's, which trailed them. What the blended draws add but keep in
+// place (fog, haze over far houses, clouds) is left out: there the history is right, and a mask would only make it shimmer.
+// The game draws them after its solid draws, but a frame's draws are recorded in pieces on several threads out of order, so
+// which copy came first is told on the GPU: flags (4 x 1) hold the frame whose solid picture was taken (x 0), whose
+// difference was made (x 1), and which frame each of the two difference images holds (x 2, 3: by the frame's parity).
+//   mode 0: the solid picture: scene into opaque, unless this frame's was taken (an earlier piece's, in the GPU's order)
+//   mode 1: the difference: what the blended draws added, as the eye weighs it, into delta (the last piece's wins)
+//   mode 3: flags[which] = frame (one invocation, after mode 0 or 1)
+//   mode 6: at the upscale: the mask, from this frame's difference (delta) against the frame before's (scene, sampled where
+//           motion says the pixel was); none without this frame's difference
+//   mode 4: the mask shown over the colour DLSS is given (RX_VK_DLSS_DEBUG=mask: that colour image bound as opaque)
+//   mode 5: the solid picture (scene) shown as that colour (RX_VK_DLSS_DEBUG=opaque)
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene;
+layout(binding = 1, rgba16f) uniform image2D opaque;
+layout(binding = 2, r32f) uniform image2D mask;
+layout(binding = 3, r32ui) uniform uimage2D flags;
+layout(binding = 4, rgba16f) uniform image2D delta;
+layout(binding = 5, rg16f) uniform image2D motion;
+layout(push_constant) uniform P { ivec2 size; uint frame; int mode; int which; float lo; float hi; float most; } pc;
+vec3 tm(vec3 c) { c = max(c, vec3(0.0)); return c / (1.0 + max(max(c.r, c.g), c.b)); }   // (bright parts squeezed)
+void main() {
+    const ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (pc.mode == 3) {
+        if (g == ivec2(0)) imageStore(flags, ivec2(pc.which, 0), uvec4(pc.frame));
+        return;
+    }
+    if (any(greaterThanEqual(g, pc.size))) return;
+    if (pc.mode == 0) {
+        if (imageLoad(flags, ivec2(0, 0)).x == pc.frame) return;
+        imageStore(opaque, g, vec4(texelFetch(scene, g, 0).rgb, 1.0));
+    } else if (pc.mode == 1) {
+        if (imageLoad(flags, ivec2(0, 0)).x != pc.frame) return;
+        imageStore(delta, g, vec4(tm(texelFetch(scene, g, 0).rgb) - tm(imageLoad(opaque, g).rgb), 1.0));
+    } else if (pc.mode == 6) {
+        if (imageLoad(flags, ivec2(2 + int(pc.frame & 1u), 0)).x != pc.frame) {
+            imageStore(mask, g, vec4(0.0));
+            return;
+        }
+        const vec3 d = imageLoad(delta, g).rgb;
+        vec3 p = vec3(0.0);   // (no difference of the frame before: all of this one's counts as changed)
+        if (imageLoad(flags, ivec2(2 + int((pc.frame - 1u) & 1u), 0)).x == pc.frame - 1u) {
+            const vec2 at = (vec2(g) + 0.5 + imageLoad(motion, g).xy) / vec2(pc.size);
+            if (all(greaterThanEqual(at, vec2(0.0))) && all(lessThanEqual(at, vec2(1.0)))) p = textureLod(scene, at, 0.0).rgb;
+        }
+        const vec3 c = abs(d - p);
+        const float v = max(max(c.r, c.g), c.b);
+        imageStore(mask, g, vec4(clamp((v - pc.lo) / max(pc.hi - pc.lo, 1e-4), 0.0, 1.0) * pc.most));
+    } else if (pc.mode == 4) {
+        const float m = imageLoad(mask, g).r;
+        const vec3 c = imageLoad(opaque, g).rgb * 0.35;
+        imageStore(opaque, g, vec4(mix(c, vec3(1.0, 0.15, 0.6), m), 1.0));
+    } else if (pc.mode == 5) {
+        imageStore(opaque, g, vec4(sqrt(clamp(texelFetch(scene, g, 0).rgb, 0.0, 1.0)), 1.0));
+    }
+}

@@ -109,13 +109,32 @@ static int handheld(void) {
    1 2560 x 1440, 2 3840 x 2160, 3 1920 x 1080. The game's frame is its display size (2560 x 1440 as shipped; nx2/oot_patches.py
    apply_output_size asks hos_output_size) times its graphics scale (GetCurrentGraphicsScale: 0 x1, 1 x0.8, 2 x0.667). Here it
    saw scale 1 (x0 left at the call before's answer), so 2048 x 1152; each explicit size uses x1. */
+/* (relink, 20/11) 4, the default: Auto, the screen's: the largest of the sizes that fits the screen the game starts on, up to
+   2560 x 1440 (its height: 1440 and over 2560 x 1440, 1152 and over the game's, else 1920 x 1080; the 4K one stays a choice of
+   its own, for its GPU cost: a 4K screen gets 2560 x 1440, already sharper than the game's 2048 x 1152). The game's frame is then
+   the screen's size and the upscaler (DLSS, FSR, the game's network) scales the 3D straight to it, the HUD drawn at it: the
+   last step to the window, which stretched the game's 2048 x 1152 over a 2560 x 1440 or 4K screen and softened the whole
+   picture, has nothing left to do (a 1920 x 1080 screen: twice the edge contrast of the default before, at no frame-rate cost,
+   bench 20/11). Only the sizes the game is known to run at (its render targets, its pool). A saved output_res stays as it is */
+int hos_output_auto_pick(void) {
+#ifdef _WIN32
+    DEVMODEW dm = {0};
+    dm.dmSize = sizeof dm;
+    const int h = EnumDisplaySettingsW(NULL, ENUM_CURRENT_SETTINGS, &dm) ? (int)dm.dmPelsHeight : 0;
+#else
+    const int h = 0;
+#endif
+    return h >= 1440 ? 1 : h >= 1152 || h == 0 ? 0 : 3;
+}
 static int output_mode(void) {
     static int v = -1;
     if (v < 0) {
         static const char *const names[] = {"2048x1152 (the game's)", "2560x1440", "3840x2160", "1920x1080"};
-        v = getenv("HOS_OUTPUT_RES") ? atoi(getenv("HOS_OUTPUT_RES")) : ini_option("output_res", 0);
+        v = getenv("HOS_OUTPUT_RES") ? atoi(getenv("HOS_OUTPUT_RES")) : ini_option("output_res", 4);
+        const int automatic = v == 4;
+        if (automatic) v = hos_output_auto_pick();
         if ((unsigned)v >= sizeof names / sizeof *names || handheld()) v = 0;
-        hos_log("oe: output resolution %s", names[v]);
+        hos_log("oe: output resolution %s%s", names[v], automatic ? " (Auto: the screen's)" : "");
     }
     return v;
 }

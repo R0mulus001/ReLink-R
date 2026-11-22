@@ -29,16 +29,142 @@ VmaAllocator vma;
 // RX_VK_FREE_LATER=0: on the caller's thread, as before
 void reap(std::function<void()> fn);
 thread_local bool on_reaper = false;
+
+// (relink, 0.7.9.3, issue 136 again) With the frees off the render thread (0.7.9.2) the same player's Market still ran at
+// 1 to 7 frames a second on an RTX 4080 SUPER: the render thread's "texture lookups" took 0.3 to 3 s at a time, with next
+// to no upload in them, and 9 to 14 images were made a frame (the game makes its render targets anew nearly every frame).
+// His log names eight slow vkFreeMemory calls (86 to 572 ms; 5 to 7 here), far too few for those stalls: what waits in a
+// texture lookup is not known. Two things for it:
+//  - MEASURES, always on: a vkAllocateMemory of VMA's and an image's creation that take over 20 ms are logged with their
+//    sizes (allocate_memory_kept, create_image). His next log says which call it is.
+//  - AN OPTION, off: RX_VK_KEEP_BLOCKS=<n> keeps up to n emptied blocks and gives them out again. A block VMA lets go, of
+//    32 MB or more, in device-local memory the CPU cannot map and asked for with nothing special (no dedicated, imported or
+//    exported memory), goes to a short list instead of the driver, and VMA's next request of the same size, memory type
+//    and flags takes it from there: no driver call either way. None while the process uses 80 % or more of what the driver
+//    allows (vram_usage's last reading), and one unused for two minutes goes back. The list is filled on the reaper, in
+//    the order of the images' destructions, so a block is given out again only once the images that were in it are gone.
+//    NOT shown to help anywhere: this bench (8 GB, nearly always over 80 %) kept 2 blocks and reused 1 in a run. For a
+//    player whose log shows slow memory calls to try.
+struct KeptBlock {
+    VkDeviceMemory memory;
+    uint64_t size;
+    uint32_t type, flags;
+    std::chrono::steady_clock::time_point at;
+};
+std::mutex kept_mu;
+std::vector<KeptBlock> kept;                                // (kept_mu: the blocks waiting, the last let go last)
+std::unordered_map<VkDeviceMemory, KeptBlock> keepable;     // (kept_mu: what each of VMA's plain blocks was asked with)
+std::atomic<int> vram_used_pct{0};                          // (vram_usage's last reading; 0: none yet)
+std::atomic<int64_t> st_blocks_kept{0}, st_blocks_reused{0}, st_blocks_freed{0};
+int keep_blocks_most() {
+    static const int n = getenv("RX_VK_KEEP_BLOCKS") ? std::clamp(atoi(getenv("RX_VK_KEEP_BLOCKS")), 0, 64) : 0;
+    return n;
+}
+/// The share of the driver's allowance under which blocks are kept (80; RX_VK_KEEP_BLOCKS_PCT=<n>, a test's: 99 keeps them on
+/// a full card too)
+int keep_blocks_under() {
+    static const int n = getenv("RX_VK_KEEP_BLOCKS_PCT") ? std::clamp(atoi(getenv("RX_VK_KEEP_BLOCKS_PCT")), 1, 999) : 80;
+    return n;
+}
+void free_block_now(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* cb, bool queued) {
+    const auto t0 = std::chrono::steady_clock::now();
+    vkFreeMemory(device, memory, cb);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    st_blocks_freed++;
+    static std::atomic<int> logged{0};
+    if ((ms > 20.0 || logged.load() < 4) && logged++ < 24)
+        logf("vk: a memory block given back to the driver in %.2f ms%s", ms, queued ? ", off the thread that emptied it" : "");
+}
+/// The kept blocks the list should no longer hold (all of them when video memory is tight, else those unused for two
+/// minutes), given back to the driver. On the reaper, or wherever a block's free ends up
+void kept_blocks_trim(VkDevice device) {
+    std::vector<VkDeviceMemory> go;
+    {
+        std::lock_guard lk(kept_mu);
+        const bool tight = vram_used_pct.load(std::memory_order_relaxed) >= keep_blocks_under();
+        const auto now = std::chrono::steady_clock::now();
+        for (size_t i = 0; i < kept.size();) {
+            if (tight || now - kept[i].at > std::chrono::seconds(120)) go.push_back(kept[i].memory), kept.erase(kept.begin() + (ptrdiff_t)i);
+            else i++;
+        }
+    }
+    for (VkDeviceMemory m : go) free_block_now(device, m, nullptr, true);
+}
+VKAPI_ATTR VkResult VKAPI_CALL allocate_memory_kept(VkDevice device, const VkMemoryAllocateInfo* ai, const VkAllocationCallbacks* cb,
+                                                    VkDeviceMemory* out) {
+    uint32_t flags = 0;
+    // (not memory the CPU can map: a block VMA mapped would come back still mapped)
+    const bool mappable = ai->memoryTypeIndex >= dev.memory.memoryTypeCount ||
+                          (dev.memory.memoryTypes[ai->memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+    bool plain = keep_blocks_most() > 0 && !cb && !mappable && ai->allocationSize >= (32ull << 20);
+    bool dedicated = false;
+    for (auto* n = (const VkBaseInStructure*)ai->pNext; n; n = n->pNext) dedicated |= n->sType == VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+    for (auto* n = (const VkBaseInStructure*)ai->pNext; n && plain; n = n->pNext) {
+        if (n->sType == VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO) flags = ((const VkMemoryAllocateFlagsInfo*)n)->flags;
+        else plain = false;   // (dedicated, imported, exported, with a priority: the driver's own business)
+    }
+    if (plain) {
+        std::lock_guard lk(kept_mu);
+        for (size_t i = kept.size(); i-- > 0;) {
+            if (kept[i].size != ai->allocationSize || kept[i].type != ai->memoryTypeIndex || kept[i].flags != flags) continue;
+            *out = kept[i].memory;
+            keepable[*out] = kept[i];
+            kept.erase(kept.begin() + (ptrdiff_t)i);
+            const int64_t n = ++st_blocks_reused;
+            if (n == 1 || n % 200 == 0)
+                logf("vk: emptied memory blocks kept and given out again: %lld reused, %lld kept in all, %lld given back to the "
+                     "driver, %zu waiting now (RX_VK_KEEP_BLOCKS=0: every block back to the driver)", (long long)n,
+                     (long long)st_blocks_kept.load(), (long long)st_blocks_freed.load(), kept.size());
+            return VK_SUCCESS;
+        }
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    VkResult r = vkAllocateMemory(device, ai, cb, out);
+    {   // (issue 136: which of the driver's memory calls takes the time on the PCs where a texture lookup takes seconds)
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        static std::atomic<int> logged{0};
+        if (ms > 20.0 && logged++ < 40)
+            logf("vk: a memory block of %llu MB (memory type %u%s) taken from the driver in %.2f ms (result %d)",
+                 (unsigned long long)(ai->allocationSize >> 20), ai->memoryTypeIndex, dedicated ? ", dedicated" : "", ms, (int)r);
+    }
+    if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY) {   // (no room: what the list holds goes back first, then once more)
+        std::vector<VkDeviceMemory> go;
+        {
+            std::lock_guard lk(kept_mu);
+            for (const KeptBlock& b : kept) go.push_back(b.memory);
+            kept.clear();
+        }
+        for (VkDeviceMemory m : go) free_block_now(device, m, nullptr, false);
+        if (!go.empty()) r = vkAllocateMemory(device, ai, cb, out);
+    }
+    if (r == VK_SUCCESS && plain) {
+        std::lock_guard lk(kept_mu);
+        keepable[*out] = {*out, ai->allocationSize, ai->memoryTypeIndex, flags, {}};
+    }
+    return r;
+}
 VKAPI_ATTR void VKAPI_CALL free_memory_later(VkDevice device, VkDeviceMemory memory, const VkAllocationCallbacks* cb) {
     static const bool later = !getenv("RX_VK_FREE_LATER") || atoi(getenv("RX_VK_FREE_LATER")) != 0;
     const bool queued = later && !on_reaper;
     const auto free_now = [device, memory, cb, queued] {
-        const auto t0 = std::chrono::steady_clock::now();
-        vkFreeMemory(device, memory, cb);
-        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        static std::atomic<int> logged{0};
-        if ((ms > 20.0 || logged.load() < 4) && logged++ < 24)
-            logf("vk: a memory block given back to the driver in %.2f ms%s", ms, queued ? ", off the thread that emptied it" : "");
+        bool keep = false;
+        {
+            std::lock_guard lk(kept_mu);
+            const auto it = keepable.find(memory);
+            if (it != keepable.end()) {
+                const int pct = vram_used_pct.load(std::memory_order_relaxed);
+                if (!cb && pct > 0 && pct < keep_blocks_under() && (int)kept.size() < keep_blocks_most()) {
+                    KeptBlock b = it->second;
+                    b.at = std::chrono::steady_clock::now();
+                    kept.push_back(b);
+                    keep = true;
+                    st_blocks_kept++;
+                }
+                keepable.erase(it);
+            }
+        }
+        if (!keep) free_block_now(device, memory, cb, queued);
+        kept_blocks_trim(device);
     };
     if (!queued) return free_now();
     reap(free_now);
@@ -49,6 +175,7 @@ bool vma_init(PFN_vkGetInstanceProcAddr gipa) {
     f.vkGetInstanceProcAddr = gipa;
     f.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
     f.vkFreeMemory = free_memory_later;   // (the others are fetched: VMA keeps the pointers it is given)
+    f.vkAllocateMemory = allocate_memory_kept;   // (relink, 0.7.9.3: an emptied block kept may be given out again)
     VmaAllocatorCreateInfo ci{};
     ci.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
                (dev.memory_budget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0);
@@ -119,7 +246,16 @@ void note_image(VmaAllocation a, const VkImageCreateInfo& ci) {
 }
 bool create_image_raw(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& allocation, bool dedicated);
 bool create_image(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& allocation, bool dedicated) {
-    if (!create_image_raw(ci, image, allocation, dedicated)) return false;
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool ok = create_image_raw(ci, image, allocation, dedicated);
+    {   // (issue 136: an image's creation that holds its thread, with what it was; the block's own line, above, says if that is it)
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        static std::atomic<int> logged{0};
+        if (ms > 20.0 && logged++ < 40)
+            logf("vk: an image made in %.2f ms: %ux%u x%u, %u levels, format %d, usage %#x%s%s", ms, ci.extent.width, ci.extent.height,
+                 ci.arrayLayers, ci.mipLevels, (int)ci.format, (unsigned)ci.usage, dedicated ? ", memory of its own" : "", ok ? "" : ": NOT made");
+    }
+    if (!ok) return false;
     note_image(allocation, ci);
     return true;
 }
@@ -427,8 +563,22 @@ bool vram_usage(uint64_t* used, uint64_t* budget, uint64_t* block_free) {
             // (the free space in VMA's blocks: the driver counts it as the process's, new allocations take it first)
             f += b[h].statistics.blockBytes - std::min(b[h].statistics.blockBytes, b[h].statistics.allocationBytes);
         }
+    // (relink) AMD's Windows driver reports a process over its allowance as allowed exactly what it uses, so the squeeze rules saw
+    // room and gave nothing back while Windows paged video memory out (1 to 15 s freezes on 8 GB cards). A budget within 16 MB
+    // above the count is taken as past it: a tenth under the count, until the driver reports more room again. One under the
+    // count already, or unknown, is left as it is. RX_VK_ALLOWED_AT_COUNT=0: as the driver says
+    static const bool at_count = !getenv("RX_VK_ALLOWED_AT_COUNT") || atoi(getenv("RX_VK_ALLOWED_AT_COUNT")) != 0;
+    if (at_count && t && u && t >= u && t - u <= (16ull << 20)) {
+        static std::atomic<int> told{0};
+        if (told++ < 8)
+            logf("vk: the driver's allowance is the count itself (%llu MB used of %llu): taken as past it, %llu MB (RX_VK_ALLOWED_AT_COUNT=0: as the driver says)",
+                 (unsigned long long)(u >> 20), (unsigned long long)(t >> 20), (unsigned long long)((u - u / 10) >> 20));
+        t = u - u / 10;
+    }
     *used = u, *budget = t;
     if (block_free) *block_free = f;
+    // (for the kept blocks, above: how full video memory is, read without asking VMA from inside its own calls)
+    if (t) vram_used_pct.store((int)std::min<uint64_t>(999, u * 100 / t) + (u * 100 / t == 0 ? 1 : 0), std::memory_order_relaxed);
     return t != 0;
 }
 

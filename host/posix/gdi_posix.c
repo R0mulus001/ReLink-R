@@ -10,12 +10,14 @@
 #define STBTT_STATIC
 #include "stb_truetype.h"
 
-enum { G_DC = 0x47444301, G_BITMAP, G_FONT, G_BRUSH };
+enum { G_DC = 0x47444301, G_BITMAP, G_FONT, G_BRUSH, G_REGION };
 typedef struct { int type; } GObj;
 typedef struct { GObj o; int w, h; uint32_t *bits; } GBitmap;
 typedef struct { GObj o; int px, bold, aa; } GFont;
 typedef struct { GObj o; COLORREF c; } GBrush;
-typedef struct { GObj o; GBitmap *bmp; GFont *font; COLORREF text; UINT align; int bk; } GDc;
+typedef struct { GObj o; int x0, y0, x1, y1; } GRegion;
+/* (clip: SelectClipRgn's rectangle, copied as GDI copies it; the region itself may be deleted while selected) */
+typedef struct { GObj o; GBitmap *bmp; GFont *font; COLORREF text; UINT align; int bk; int clip, cx0, cy0, cx1, cy1; } GDc;
 
 /* ---- the fonts: regular and bold, loaded once ---- */
 typedef struct { unsigned char *data; stbtt_fontinfo info; int ok; } Face;
@@ -138,13 +140,39 @@ HBRUSH CreateSolidBrush(COLORREF c) {
     b->o.type = G_BRUSH, b->c = c;
     return b;
 }
+HRGN CreateRectRgn(int x1, int y1, int x2, int y2) {
+    GRegion *g = (GRegion *)calloc(1, sizeof *g);
+    g->o.type = G_REGION;
+    g->x0 = x1 < x2 ? x1 : x2, g->x1 = x1 < x2 ? x2 : x1, g->y0 = y1 < y2 ? y1 : y2, g->y1 = y1 < y2 ? y2 : y1;
+    return g;
+}
+int SelectClipRgn(HDC hdc, HRGN rgn) {
+    GDc *d = (GDc *)hdc;
+    if (!d) return 0;                               /* (ERROR) */
+    const GRegion *g = (const GRegion *)rgn;
+    if (g && g->o.type != G_REGION) return 0;
+    d->clip = g != NULL;
+    if (g) d->cx0 = g->x0, d->cy0 = g->y0, d->cx1 = g->x1, d->cy1 = g->y1;
+    return g && (g->x0 == g->x1 || g->y0 == g->y1) ? 1 : 2;   /* (NULLREGION : SIMPLEREGION) */
+}
+/* The part of the bitmap a drawing may touch: the bitmap, cut to the clip rectangle when one is selected */
+static void drawable(const GDc *d, int *x0, int *y0, int *x1, int *y1) {
+    *x0 = 0, *y0 = 0, *x1 = d->bmp->w, *y1 = d->bmp->h;
+    if (!d->clip) return;
+    if (d->cx0 > *x0) *x0 = d->cx0;
+    if (d->cy0 > *y0) *y0 = d->cy0;
+    if (d->cx1 < *x1) *x1 = d->cx1;
+    if (d->cy1 < *y1) *y1 = d->cy1;
+}
 static uint32_t bgrx(COLORREF c) { return (uint32_t)(c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16 & 0xFF); }
 int FillRect(HDC hdc, const RECT *r, HBRUSH hb) {
     GDc *d = (GDc *)hdc;
     if (!d || !d->bmp || !hb) return 0;
     const uint32_t px = bgrx(((GBrush *)hb)->c);
-    const int x0 = r->left < 0 ? 0 : r->left, y0 = r->top < 0 ? 0 : r->top;
-    const int x1 = r->right > d->bmp->w ? d->bmp->w : r->right, y1 = r->bottom > d->bmp->h ? d->bmp->h : r->bottom;
+    int bx0, by0, bx1, by1;
+    drawable(d, &bx0, &by0, &bx1, &by1);
+    const int x0 = r->left < bx0 ? bx0 : r->left, y0 = r->top < by0 ? by0 : r->top;
+    const int x1 = r->right > bx1 ? bx1 : r->right, y1 = r->bottom > by1 ? by1 : r->bottom;
     for (int y = y0; y < y1; y++)
         for (int x = x0; x < x1; x++) d->bmp->bits[(size_t)y * d->bmp->w + x] = px;
     return 1;
@@ -205,6 +233,8 @@ BOOL TextOutA(HDC hdc, int x, int y, LPCSTR s, int n) {
                        : (d->align & TA_BOTTOM) ? y + (int)lroundf(desc * sc) : y + (int)lroundf(asc * sc);
     const int aa = !d->font || d->font->aa;
     const uint32_t tr = d->text & 0xFF, tg = d->text >> 8 & 0xFF, tb = d->text >> 16 & 0xFF;
+    int bx0, by0, bx1, by1;
+    drawable(d, &bx0, &by0, &bx1, &by1);
     float pen = (float)x;
     for (int i = 0; i < n; i++) {
         const int cp = (unsigned char)s[i];
@@ -219,10 +249,10 @@ BOOL TextOutA(HDC hdc, int x, int y, LPCSTR s, int n) {
             const int ox = (int)floorf(pen) + x0, oy = baseline + y0;
             for (int yy = 0; yy < gh; yy++) {
                 const int py = oy + yy;
-                if (py < 0 || py >= d->bmp->h) continue;
+                if (py < by0 || py >= by1) continue;
                 for (int xx = 0; xx < gw; xx++) {
                     const int px = ox + xx;
-                    if (px < 0 || px >= d->bmp->w) continue;
+                    if (px < bx0 || px >= bx1) continue;
                     unsigned a = g[yy * gw + xx];
                     if (!aa) a = a >= 128 ? 255 : 0;
                     if (!a) continue;

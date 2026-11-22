@@ -129,9 +129,16 @@ const void* descriptor_ok(const void* p, size_t n) {
     if (!p) return nullptr;
     const uintptr_t q = (uintptr_t)p, base = (uintptr_t)host->guest_base();
     if (q >= base && q + n <= base + host->guest_size()) return p;
-    uint64_t avail = 0;
-    if (const uint8_t* h = host->gpu_ptr((uint64_t)q, &avail); h && avail >= n) return h;
-    // (the host's own copies: registrations made before the renderer started, kept by host/rx_backend.c)
+    // (relink) a registration's pointer is never a GPU address, so host->gpu_ptr() is not asked: with the native NVN layer every value
+    // from 16 MB to 512 GB counts as a guest address there, and a kept copy on the heap in that range was read from guest memory (all
+    // zeros: sampler 258 nearest, empty texture slots, blocky light halos). Outside the guest window it is the host's own copy, read
+    // when the memory is committed and readable (registrations made before the renderer started, kept by host/rx_backend.c).
+    // RX_VK_REG_GPU_PTR=1: asked first, as before
+    static const bool ask_gpu = getenv("RX_VK_REG_GPU_PTR") && atoi(getenv("RX_VK_REG_GPU_PTR")) != 0;
+    if (ask_gpu) {
+        uint64_t avail = 0;
+        if (const uint8_t* h = host->gpu_ptr((uint64_t)q, &avail); h && avail >= n) return h;
+    }
     MEMORY_BASIC_INFORMATION mi{};
     if (VirtualQuery(p, &mi, sizeof mi) == sizeof mi && mi.State == MEM_COMMIT &&
         (mi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY)) && !(mi.Protect & PAGE_GUARD) &&

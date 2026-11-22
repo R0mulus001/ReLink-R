@@ -40,6 +40,10 @@ struct HostTranslateInfo {
     bool support_conditional_barrier{}; ///< True when the device supports barriers in conditional
                                         ///< control flow
     bool single_lane_geometry_subgroups{};
+    /// A texture handle read from a table at an index each invocation reads for itself (a light
+    /// list's light, then that light's shadow map) becomes a descriptor array of the table's
+    /// first entries, indexed per invocation. Needs nonuniform sampled image array indexing.
+    bool support_lookup_tables{};
 
     void ApplyDescriptorLimitPolicy() noexcept {
         if (min_ssbo_alignment == 0) {

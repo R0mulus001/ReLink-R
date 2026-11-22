@@ -47,6 +47,12 @@
 #include "vk_dlss.h"
 #include "vk_fsr.h"
 #include "vk_reflex.h"
+#if defined(_WIN32)
+#include <psapi.h>   // (relink: the detailed FPS counter's RAM line, K32GetProcessMemoryInfo)
+#else
+#include <sys/resource.h>   // (its CPU line)
+#include <unistd.h>
+#endif
 #include "upscaler_rows.h"
 #include "menu_restart.h"
 #ifndef RELINK_VERSION   // (nx2/build.py gives it to this file: nx2/version.py)
@@ -95,6 +101,8 @@ const char* tx_framegen(int v) {
     return t[v];
 }
 const char* tx_onoff(int v) { return v ? "On" : "Off"; }
+const char* tx_fps_counter(int v) { return v >= 2 ? "Detailed" : v ? "On" : "Off"; }
+const char* tx_menu_look(int v) { return v ? "Dark" : "Light"; }
 // (relink) Motion controls: the choice, and whether a connected controller has a gyroscope (host/pad_sdl.c). Either can be
 // chosen whatever is connected: a pad plugged in later is read when it comes
 const char* tx_gyro(int v) {
@@ -148,24 +156,43 @@ const char* hn_reflex(int v, int variant) {
 // choice for a PC where it can
 namespace ur = upscaler_rows;
 int upscaler() { return dlss_mode(); }
+/// (relink, 0.7.9.3) NVIDIA DLSS Frame Generation can be chosen in the Frame generator row: it runs here, or NGX was not asked yet
+/// (relink, 0.7.9.3) DLSS, DLAA or FSR is the Upscaler (not the game's own, nor None): the Sharpness row is their own value
+bool up_sharpened() {
+    const int up = upscaler();
+    return up == ur::DLSS || up == ur::DLAA || up == ur::FSR || up == ur::FSR_AA;
+}
+bool dlssg_choosable() { return dlssg_why() == DLSSG_OK || dlssg_why() == DLSSG_UNKNOWN; }
 bool dlss_ok() { return dlss_why() == DLSS_OK; }
 bool fsr_ok() { return fsr_why() == FSR_OK; }
+/// (relink) FSR 4 runs: AMD's runtime makes it on this GPU and the FSR version row leaves it on Auto
+bool fsr4_runs() { return fsr4_available() && !(opts.fsr_version == 1 && fsr31_available()); }
 const char* tx_upscaler(int) {
-    static const char* t[] = {"Game's own", "NVIDIA DLSS", "NVIDIA DLAA", "AMD FSR", "AMD FSR native AA"};
-    return t[std::clamp(upscaler(), 0, ur::kUpscalers - 1)];
+    static const char* t[] = {"Game's own", "NVIDIA DLSS", "NVIDIA DLAA", "AMD FSR", "AMD FSR native AA", "None"};
+    static const char* t4[] = {"Game's own", "NVIDIA DLSS", "NVIDIA DLAA", "AMD FSR 4", "AMD FSR 4 native AA", "None"};
+    return (fsr4_runs() ? t4 : t)[std::clamp(upscaler(), 0, ur::kUpscalers - 1)];
 }
 /// The Upscaler: the one shown (what runs, upscaler()), and with the game's own, why DLSS and DLAA, and FSR, are not offered
 const char* hn_upscaler(int v, int variant) {
     static const char* const t[] = {
         "The game's own network.",
-        "NVIDIA's, from a smaller 3D. Softer than the game's own: set Sharpness to around 80%. Things that move by "
-        "themselves can trail for now.",
-        "NVIDIA's, the 3D at full size with its edges smoothed; the slowest. Softer than the game's own: set Sharpness to "
-        "around 80%. Things that move by themselves can trail for now.",
-        "AMD's FSR 3.1, from a smaller 3D, on any GPU. Softer than the game's own: set Sharpness to around 80%. Things "
-        "that move by themselves can trail for now.",
-        "AMD's FSR 3.1, the 3D at full size with its edges smoothed, on any GPU; slower. A little softer than the game's "
-        "own. Things that move by themselves can trail for now.",
+        "NVIDIA's, from a smaller 3D. Sharpened to the game's own crispness by default (the Sharpness row). "
+        "Things that move by themselves can trail for now.",
+        "NVIDIA's, the 3D at full size with its edges smoothed; the slowest. Sharpened to the game's own crispness by "
+        "default (the Sharpness row). Things that move by themselves can trail for now.",
+        "AMD's FSR 3.1, from a smaller 3D, on any GPU. Sharpened to the game's own crispness by default (the Sharpness "
+        "row). Things that move by themselves can trail for now.",
+        "AMD's FSR 3.1, the 3D at full size with its edges smoothed, on any GPU; slower. Sharpened to the game's own "
+        "crispness by default (the Sharpness row). Things that move by themselves can trail for now.",
+        "No upscaler: the 3D at full size, shown as it is drawn. Nothing is smoothed and nothing trails; edges are "
+        "jagged, and leaves, fences and far lines shimmer. Softer than the game's own, which sharpens: Sharpness helps.",
+    };
+    // (relink: FSR 4, AMD's network, where its runtime makes it on this GPU: the RX 6000 series and later)
+    static const char* const t4[] = {
+        "AMD's FSR 4, its network, from a smaller 3D. Sharper and steadier than FSR 3.1, at more GPU time on an RX 6000 or "
+        "7000. The FSR version row can go back to 3.1.",
+        "AMD's FSR 4, its network, the 3D at full size with its edges smoothed; the slowest of AMD's. The FSR version row "
+        "can go back to 3.1.",
     };
     static const char* const why[DLSS_WHY_COUNT] = {
         nullptr,
@@ -185,9 +212,9 @@ const char* hn_upscaler(int v, int variant) {
         "AMD FSR: libamd_fidelityfx_vk.so did not load (the log says why).",
         "AMD FSR: libamd_fidelityfx_vk.so has no upscaler for Vulkan.",
 #else
-        "AMD FSR: AMD's amd_fidelityfx_vk.dll is not in the game folder.",
-        "AMD FSR: amd_fidelityfx_vk.dll did not load (the log says why; it needs Microsoft's Visual C++ runtime).",
-        "AMD FSR: amd_fidelityfx_vk.dll has no upscaler for Vulkan.",
+        "AMD FSR: AMD's amd_fidelityfx_loader_vk.dll is not in the game folder.",
+        "AMD FSR: AMD's DLLs did not load (the log says why; they need Microsoft's Visual C++ runtime).",
+        "AMD FSR: AMD's DLLs have no upscaler for Vulkan.",
 #endif
         "AMD FSR: this GPU or its driver cannot run it.",
     };
@@ -195,9 +222,11 @@ const char* hn_upscaler(int v, int variant) {
     int w = 0, f = 0;
     if (variant < 0) v = std::clamp(upscaler(), 0, ur::kUpscalers - 1), w = (int)dlss_why(), f = (int)fsr_why();
     else if (v == ur::GAME) w = variant / FSR_WHY_COUNT, f = variant % FSR_WHY_COUNT;
+    else if ((v == ur::FSR || v == ur::FSR_AA) && variant == 1) return t4[v - ur::FSR];   // (relink: its FSR 4 line, for the height)
     else if (variant > 0) return nullptr;
     v = std::clamp(v, 0, ur::kUpscalers - 1);
     if (w >= DLSS_WHY_COUNT || f >= FSR_WHY_COUNT) return nullptr;
+    if ((v == ur::FSR || v == ur::FSR_AA) && variant < 0 && fsr4_runs()) return t4[v - ur::FSR];
     if (v != ur::GAME || (!why[w] && !fsr_why_text[f])) return t[v];
     static char b[DLSS_WHY_COUNT][FSR_WHY_COUNT][320];
     snprintf(b[w][f], sizeof b[w][f], "%s%s%s%s%s", t[0], why[w] ? " " : "", why[w] ? why[w] : "",
@@ -236,6 +265,28 @@ const char* hn_dlss_model(int v, int variant) {
     if (variant == 2) return env;
     return variant == 0 ? t[std::clamp(v, 0, ur::kModels - 1)] : nullptr;
 }
+/// (relink) The FSR version row (opts.fsr_version): Auto (the newest AMD's runtime makes here) or FSR 3.1
+const char* tx_fsr_version(int v) {
+    if (fsr_ok() && !fsr4_available()) {   // (FSR 3.1 is all there is here: the row says so)
+        static char b[48];
+        snprintf(b, sizeof b, "FSR %s", fsr_version());
+        return b;
+    }
+    return v == 1 ? "FSR 3.1" : "Auto (FSR 4)";
+}
+/// The FSR version: the value chosen; variant 1: another upscaler draws; variant 2: FSR 4 is not made on this GPU
+const char* hn_fsr_version(int v, int variant) {
+    static const char* const t[] = {
+        "FSR 4, AMD's network: sharper and steadier, at more GPU time (about 2 ms a frame at 1080p on an RX 6600).",
+        "FSR 3.1: lighter on the GPU, softer, and things that move can shimmer more.",
+    };
+    static const char* const unused = "Used by AMD FSR and its native AA: choose one in the Upscaler row.";
+    static const char* const only31 = "AMD's runtime makes FSR 4 on the RX 6000 series and later, with a recent driver: FSR 3.1 here.";
+    if (variant < 0) variant = !fsr_ok() || (upscaler() != ur::FSR && upscaler() != ur::FSR_AA) ? 1 : !fsr4_available() ? 2 : 0;
+    if (variant == 1) return unused;
+    if (variant == 2) return only31;
+    return variant == 0 ? t[std::clamp(v, 0, 1)] : nullptr;
+}
 const char* tx_percent(int v) {
     static char b[8];
     snprintf(b, sizeof b, "%d%%", v);
@@ -248,17 +299,32 @@ struct Out {
 };
 constexpr Out kOutputs[] = {{2048, 1152}, {2560, 1440}, {3840, 2160}, {1920, 1080}};
 constexpr int kLastOutput = std::size(kOutputs) - 1;
-int output_choice(int v) { return v >= 0 && v <= kLastOutput ? v : 0; }
-// Display the sizes from smallest to largest while keeping the IDs used by saved settings.
-constexpr int kOutputOrder[] = {3, 0, 1, 2};
-static_assert(std::size(kOutputOrder) == std::size(kOutputs));
+// (relink, 20/11) 4: Auto, the screen's: the largest of the four sizes that fits the screen (host/nn_applet.c
+// hos_output_auto_pick, the same rule: the game reads it there at the start). The upscaler then scales the 3D straight to the
+// screen's size and the HUD is drawn at it, with no stretch of the whole frame to the window after
+constexpr int kAutoOutput = 4;
+int output_auto_pick() {
+#ifdef _WIN32
+    DEVMODEW dm{};
+    dm.dmSize = sizeof dm;
+    const int h = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) ? (int)dm.dmPelsHeight : 0;
+#else
+    const int h = 0;
+#endif
+    return h >= 1440 ? 1 : h >= 1152 || h == 0 ? 0 : 3;
+}
+int output_choice(int v) { return (v >= 0 && v <= kLastOutput) || v == kAutoOutput ? v : 0; }
+int output_resolved(int v) { return v == kAutoOutput ? output_auto_pick() : output_choice(v); }
+// Display the sizes from smallest to largest while keeping the IDs used by saved settings (Auto first).
+constexpr int kOutputOrder[] = {kAutoOutput, 3, 0, 1, 2};
+constexpr int kLastOrder = std::size(kOutputOrder) - 1;
 int step_output_choice(int id, int dir) {
     const int* pos = std::find(std::begin(kOutputOrder), std::end(kOutputOrder), output_choice(id));
-    const int next = std::clamp((int)(pos - std::begin(kOutputOrder)) + dir, 0, kLastOutput);
+    const int next = std::clamp((int)(pos - std::begin(kOutputOrder)) + dir, 0, kLastOrder);
     return kOutputOrder[next];
 }
 Out shown_output() {
-    return opts.handheld ? Out{1536, 864} : kOutputs[output_choice(opts.output_res)];
+    return opts.handheld ? Out{1536, 864} : kOutputs[output_resolved(opts.output_res)];
 }
 // The size the game draws the 3D at for a fixed scale of its output, a twelfth of it: every twelfth asked came out exact at the three
 // outputs (2048x1152: 0.58 drew 1195x672, 0.6667 1366x768). So the scale the game is given is the twelfth too: 0.67 drew 2615x1471 at
@@ -274,6 +340,7 @@ const char* tx_resolution(int v) {
     const int up = upscaler();
     if (up == ur::DLAA) return "Native (DLAA)";
     if (up == ur::FSR_AA) return "Native (FSR native AA)";
+    if (up == ur::NONE) return "Native (no upscaler)";
     if (!ur::percent(v)) return "Auto (dynamic)";
     if (const char* mode = ur::temporal_steps(up) ? ur::dlss_mode_name(v) : nullptr) {
         snprintf(b, sizeof b, "%s (%d%%)", mode, ur::percent(v));
@@ -294,6 +361,9 @@ const char* hn_resolution(int v, int variant) {
     if (up == ur::FSR_AA)
         return "FSR native AA draws the 3D at full size: nothing to set here. Choose AMD FSR or the game's own upscaler to "
                "draw it smaller.";
+    if (up == ur::NONE)
+        return "Without an upscaler the 3D is drawn at full size: nothing to set here. Choose an upscaler to draw it "
+               "smaller.";
     const int p = ur::percent(v);
     if (up == ur::FSR) {   // (relink) FSR's modes are DLSS's shares, by the same names
         switch (p) {
@@ -307,11 +377,11 @@ const char* hn_resolution(int v, int variant) {
     }
     if (up == ur::DLSS) {
         switch (p) {
-        case 0: return "The game lowers it when the GPU is busy, and DLSS follows. Set Sharpness to around 80%.";
-        case 67: return "DLSS's sharpest mode. Set Sharpness to around 80%.";
-        case 58: return "Between Quality and Performance. Set Sharpness to around 80%.";
-        case 50: return "Faster, and softer. Set Sharpness to around 80%.";
-        case 33: return "DLSS's fastest mode, and its softest. Set Sharpness to around 80%.";
+        case 0: return "The game lowers it when the GPU is busy, and DLSS follows.";
+        case 67: return "DLSS's sharpest mode.";
+        case 58: return "Between Quality and Performance.";
+        case 50: return "Faster, and softer.";
+        case 33: return "DLSS's fastest mode, and its softest.";
         default: return nullptr;   // (not one of DLSS's steps: the row moves to one)
         }
     }
@@ -323,13 +393,17 @@ const char* hn_resolution(int v, int variant) {
 bool row_fixed(const int* value) {
     return (value == &opts.reflex && !reflex_available()) || (value == &opts.dlss && ur::upscaler_fixed(dlss_ok(), fsr_ok())) ||
            (value == &opts.resolution && ur::resolution_fixed(upscaler())) || (value == &opts.upscale && !filter_needed()) ||
-           (value == &opts.dlss_model && ur::model_fixed(upscaler(), dlss_preset_env() != nullptr));
+           (value == &opts.dlss_model && ur::model_fixed(upscaler(), dlss_preset_env() != nullptr)) ||
+           (value == &opts.fsr_version && (!fsr31_available() || (upscaler() != ur::FSR && upscaler() != ur::FSR_AA))) ||
+           (value == &opts.fg_kind && !dlssg_choosable());
 }
 const char* tx_output_res(int v) {
     static char b[32];
     v = output_choice(v);
-    const Out o = kOutputs[v];
-    snprintf(b, sizeof b, "%ux%u%s", o.w, o.h, v ? "" : " (game's)");
+    const int r = output_resolved(v);
+    const Out o = kOutputs[r];
+    if (v == kAutoOutput) snprintf(b, sizeof b, "Auto (%ux%u)", o.w, o.h);
+    else snprintf(b, sizeof b, "%ux%u%s", o.w, o.h, v ? "" : " (game's)");
     return b;
 }
 const char* tx_speed(int v) { return v ? "Real time" : "Per frame"; }
@@ -451,11 +525,11 @@ void apply_preset(int p) {
 }
 
 MENU_HINTS(hn_preset, 0, "Each row as you set it. Changing most rows yourself comes back to Custom.",
-           "Resolution 50% (with DLSS its nearest mode), Lanczos, Sharpness 50%, 2x frames, Handheld profile.",
-           "Resolution 75% (with DLSS its nearest mode), Lanczos, Sharpness 35%, 2x frames, Handheld profile.",
-           "Resolution 100% (with DLSS its nearest mode), Catmull-Rom, Sharpness 25%, 2x frames.",
-           "Resolution 100% (with DLSS its nearest mode), Lanczos, Sharpness 30%, 2x frames.",
-           "Resolution 100% (with DLSS its nearest mode), Lanczos, Sharpness 40%, 3x frames.")
+           "Resolution 50% (with DLSS its nearest mode), Lanczos, Sharpness 50% (the game's own upscaler), 2x frames, Handheld profile.",
+           "Resolution 75% (with DLSS its nearest mode), Lanczos, Sharpness 35% (the game's own upscaler), 2x frames, Handheld profile.",
+           "Resolution 100% (with DLSS its nearest mode), Catmull-Rom, Sharpness 25% (the game's own upscaler), 2x frames.",
+           "Resolution 100% (with DLSS its nearest mode), Lanczos, Sharpness 30% (the game's own upscaler), 2x frames.",
+           "Resolution 100% (with DLSS its nearest mode), Lanczos, Sharpness 40% (the game's own upscaler), 3x frames.")
 MENU_HINTS(hn_gpu, 0, "The best dedicated GPU.")
 /// Frame generation: how many frames are made for each of the game's
 const char* hn_framegen(int v, int variant) {
@@ -466,7 +540,35 @@ const char* hn_framegen(int v, int variant) {
              : v == 5 ? "Four made frames" : v == 6 ? "Five made frames" : v == 7 ? "Six made frames" : "Seven made frames");
     return b[std::clamp(v, 2, 8)];
 }
-MENU_HINTS(hn_pace, 0, "As soon as it is ready.", "At an even interval: less stutter, at up to one frame of delay.")
+/// (relink, 0.7.9.3) The Frame generator row (opts.fg_kind): ReLink's own frames, or NVIDIA DLSS Frame Generation's
+const char* tx_fg_kind(int v) {
+    if (!dlssg_choosable()) return "ReLink";
+    return v == 1 ? "NVIDIA DLSS" : "ReLink";
+}
+/// The value chosen; variant 1: DLSS Frame Generation cannot run here (why); variant 2: it waits for an upscaler of ours
+const char* hn_fg_kind(int v, int variant) {
+    static const char* const why[DLSSG_WHY_COUNT] = {
+        nullptr, nullptr, "This build has no NVIDIA DLSS: ReLink makes the frames.",
+        "NVIDIA DLSS Frame Generation needs an RTX 40 series GPU or later: ReLink makes the frames.",
+        "NVIDIA DLSS Frame Generation needs a newer NVIDIA driver: ReLink makes the frames.",
+        "NVIDIA's frame generation runtime (nvngx_dlssg.dll) was not found: turn NVIDIA DLSS on again in the launcher.",
+        "NVIDIA DLSS Frame Generation failed in this session: ReLink makes the frames until a restart."};
+    static const char* const t[] = {
+        "ReLink's own frames, from the game's last two pictures: any GPU.",
+        "NVIDIA's frames, from the depth and motion DLSS, DLAA or FSR is given: fewer artifacts. RTX 40 series and later.",
+    };
+    static const char* const needs = "Works with DLSS, DLAA or FSR as the Upscaler: with the game's own, ReLink makes the frames.";
+    if (variant < 0) {
+        const DlssgWhy w = dlssg_why();
+        variant = w != DLSSG_OK && w != DLSSG_UNKNOWN ? 1 : v == 1 && (upscaler() == 0 || upscaler() == ur::NONE) ? 2 : 0;
+    }
+    if (variant == 1) return why[std::clamp((int)dlssg_why(), 0, DLSSG_WHY_COUNT - 1)];
+    if (variant == 2) return needs;
+    return variant == 0 ? t[std::clamp(v, 0, 1)] : nullptr;
+}
+MENU_HINTS(hn_pace, 0, "As soon as it is ready.",
+           "At an even interval: less stutter, at up to one frame of delay (10 ms at most without Frame generation; not with "
+           "Low latency on).")
 MENU_HINTS(hn_vsync, 0, "Each frame is shown as soon as it is ready: the least delay. Where the driver has no mailbox mode "
            "(AMD's on Windows), a line can tear across the picture.",
            "Each frame waits for the display's refresh: no tearing, a little more delay. Below the display's rate, a frame "
@@ -474,7 +576,9 @@ MENU_HINTS(hn_vsync, 0, "Each frame is shown as soon as it is ready: the least d
 MENU_HINTS(hn_output_res, 0, "The game's own size.",
            "The sharpest on a 2560x1440 screen: nothing to scale to the window.",
            "The sharpest on a 3840x2160 screen. The game's render targets get a bigger GPU pool, so a full-size 3D fits.",
-           "The sharpest on a 1920x1080 screen: the HUD and text pixel for pixel, nothing to scale to the window.")
+           "The sharpest on a 1920x1080 screen: the HUD and text pixel for pixel, nothing to scale to the window.",
+           "The size that fits this screen: the upscaler scales the 3D straight to it and the HUD is drawn at it, nothing "
+           "stretched to the window after. A larger screen asks more of the GPU.")
 /// The Window scaling filter: its filter, or that none is needed at this window's size
 const char* hn_filter(int v, int variant) {
     static const char* const t[] = {"The plain copy.", "Sharper.", "Sharper still; can ring on edges."};
@@ -483,22 +587,29 @@ const char* hn_filter(int v, int variant) {
     if (variant < 0) return filter_needed() ? t[std::clamp(v, 0, 2)] : none;
     return variant == 0 ? t[std::clamp(v, 0, 2)] : variant == 1 ? none : nullptr;
 }
-/// Sharpness: with DLSS or DLAA, the amount that suits them
+/// Sharpness, with the game's own upscaler or None
 const char* hn_sharpness(int v, int variant) {
-    static const char* const dlss = "DLSS and DLAA look softer than the game's own upscaler: around 80% suits them.";
-    // (relink) FSR measured as soft as DLSS in the Market (the mean edge strength of a house front at 67%: the game's own
-    // 19, DLSS 10.8, FSR 9.1): the same advice. Its native AA is nearer the game's own (15): none
-    static const char* const fsr = "AMD FSR looks softer than the game's own upscaler, as DLSS does: around 80% suits it.";
-    const int up = upscaler();
-    const int which = variant < 0 ? (up == ur::DLSS || up == ur::DLAA ? 1 : up == ur::FSR ? 2 : 0) : variant;
-    if (which > 2) return nullptr;
-    return which == 1 ? dlss : which == 2 ? fsr : v == 0 ? "Off: the picture as it is." : nullptr;
+    static const char* const off = "Off: the picture as it is.";
+    if (variant >= 0) return variant == 0 ? off : nullptr;   // (each hint the row can show, for the menu's layout)
+    return v == 0 ? off : nullptr;
+}
+/// (relink, 0.7.9.3) Sharpness while DLSS, DLAA or FSR draws: what the amounts do, as measured (vk_menu.h up_sharpness)
+const char* hn_up_sharpness(int v, int variant) {
+    static const char* const t[] = {
+        "Off: as soft as the upscaler leaves it, a little softer than the 3D drawn at full size.",
+        "Less than the default: around 20% is about as crisp as the 3D drawn at full size.",
+        "The default: about as crisp as the game's own upscaler.",
+        "Crisper than the game's own upscaler; edges get halos as it goes up.",
+    };
+    if (variant >= 0) return variant < 4 ? t[variant] : nullptr;
+    return t[v == 0 ? 0 : v < 40 ? 1 : v == 40 ? 2 : 3];
 }
 MENU_HINTS(hn_handheld, 0, "Docked: the Output resolution's size.", "Lower resolutions, lighter on the GPU.")
 MENU_HINTS(hn_ultrawide, 0, "The game's own shape.",
     "The camera widens to fill a screen wider than 16:9 (21:9, 32:9), the HUD in the middle. A 16:10 or 4:3 screen keeps 16:9.")
 MENU_HINTS(hn_robust, 0, "On, on every card.", "Can be faster on some NVIDIA cards.", "Always on.")
-MENU_HINTS(hn_fps, 0, nullptr, "With frame generation on, the game's own rate too.")
+MENU_HINTS(hn_fps, 0, nullptr, "With frame generation on, the game's own rate too.",
+           "Frame times and their graph, the 1% low, the GPU's time and video memory, the CPU and the RAM.")
 MENU_HINTS(hn_speed, 0, "A step each frame: the game slows down whenever it runs below 60 fps.",
            "Normal speed down to 15 fps, by taking longer steps.")
 MENU_HINTS(hn_text_speed, 0, "The game's own pace, with its pauses.", "Twice as fast.", "Four times as fast.",
@@ -569,25 +680,32 @@ Row rows[] = {
     {TAB_GRAPHICS, "Frame generation", &opts.framegen, 0, 8, 1, tx_framegen,
      "Makes frames between the game's own, for smoother motion, at a little input delay. Fast motion or camera cuts can "
      "show artifacts.", hn_framegen},
+    {TAB_GRAPHICS, "Frame generator", &opts.fg_kind, 0, 1, 1, tx_fg_kind,   // (relink, 0.7.9.3: vk_dlss.cpp dlssg_generate)
+     "What makes the frames between the game's: ReLink, or NVIDIA DLSS Frame Generation.", hn_fg_kind, false, true},
     {TAB_GRAPHICS, "Frame pacing", &opts.pace, 0, 1, 1, tx_onoff, "When each frame is shown.", hn_pace},
     {TAB_GRAPHICS, "V-Sync", &opts.vsync, 0, 1, 1, tx_onoff,   // (relink: vk_main.cpp make_swapchain)
      "Shows each frame in step with the display's refresh, so the picture never tears. Applies at once.", hn_vsync, false, true},
     {TAB_GRAPHICS, "Low latency", &opts.reflex, 0, 2, 1, tx_reflex,
      "NVIDIA Reflex / AMD Anti-Lag 2: starts each frame as late as it can, for less input delay. Not used with frame generation.", hn_reflex},
     // (the picture's way, top to bottom: the output's size, what fills it from the 3D, the 3D's size, then the window)
-    {TAB_GRAPHICS, "Output resolution", &opts.output_res, 0, kLastOutput, 1, tx_output_res,
+    {TAB_GRAPHICS, "Output resolution", &opts.output_res, 0, kAutoOutput, 1, tx_output_res,
      "The game's whole frame, HUD included, before it is scaled to the window. Docked only. Applies after a restart.",
      hn_output_res, true},
     {TAB_GRAPHICS, "Upscaler", &opts.dlss, 0, ur::kUpscalers - 1, 1, tx_upscaler, "What scales the 3D up to the Output resolution.",
      hn_upscaler},
     {TAB_GRAPHICS, "DLSS model", &opts.dlss_model, 0, ur::kModels - 1, 1, tx_dlss_model,
      "Which of NVIDIA's DLSS networks draws the picture.", hn_dlss_model, false, true},
+    {TAB_GRAPHICS, "FSR version", &opts.fsr_version, 0, 1, 1, tx_fsr_version,
+     "Which of AMD's FSR draws the picture: FSR 4, its network, where this GPU runs it, or FSR 3.1.", hn_fsr_version, false, true},
     {TAB_GRAPHICS, "Render resolution", &opts.resolution, 0, ur::kValues - 1, 1, tx_resolution,
      "The share of the output the 3D is drawn at; the Upscaler fills in the rest.", hn_resolution},
     {TAB_GRAPHICS, "Window scaling filter", &opts.upscale, 0, 2, 1, tx_filter,
      "How the finished picture is scaled to the window, when its size differs from the Output resolution.", hn_filter},
     {TAB_GRAPHICS, "Sharpness", &opts.sharpness, 0, 100, 10, tx_percent,
-     "Sharpens the picture as it goes to the window, with any filter. Too much shows halos around edges.", hn_sharpness},
+     "Sharpens the picture as it goes to the window. Too much shows halos.", hn_sharpness},
+    // (relink, 0.7.9.3) the same row while DLSS, DLAA or FSR draws, a value of its own (row_shown shows one of the two)
+    {TAB_GRAPHICS, "Sharpness", &opts.up_sharpness, 0, 100, 10, tx_percent,
+     "Sharpens the 3D under the HUD. 40% by default; too much shows halos.", hn_up_sharpness},
     {TAB_GRAPHICS, "Handheld profile", &opts.handheld, 0, 1, 1, tx_onoff,
      "Runs the game as if the console were undocked. Applies after a restart.", hn_handheld, true},
     {TAB_GRAPHICS, "Ultrawide", &opts.ultrawide, 0, 1, 1, tx_ultrawide,
@@ -599,7 +717,7 @@ Row rows[] = {
      "restart.", hn_robust, true},
 
     // Gameplay (7 rows here; Quit game and Cheats at the end of the table)
-    {TAB_GAMEPLAY, "FPS counter", &opts.show_fps, 0, 1, 1, tx_onoff, "Frames per second in the top right corner.", hn_fps,
+    {TAB_GAMEPLAY, "FPS counter", &opts.show_fps, 0, 2, 1, tx_fps_counter, "Frames per second in the top right corner.", hn_fps,
      false, true},
     {TAB_GAMEPLAY, "Game speed", &opts.realtime, 0, 1, 1, tx_speed, "How the game keeps time when it runs below 60 fps.",
      hn_speed},
@@ -624,6 +742,9 @@ Row rows[] = {
      "Saves a picture of the game, without this menu, in the game folder's screenshots folder.", hn_hotkey, false, true},
     {TAB_GAMEPLAY, "Fullscreen key", &opts.key_full, 0, kHotkeyNone, 1, tx_hotkey,
      "Switches between the window and fullscreen. Alt+Enter does too.", hn_hotkey, false, true},
+    {TAB_GAMEPLAY, "Menu look", &opts.menu_dark, 0, 1, 1, tx_menu_look,   // (relink: cart::set_look; the launcher's look sets it too)
+     "The colours of this menu: the cream label, or the same cartridge in dark. The launcher's own look row sets it too.",
+     nullptr, false, true},
 
     // Controls (17 rows)
     {TAB_CONTROLS, "Controller in background", &opts.pad_background, 0, 1, 1, tx_onoff,
@@ -822,7 +943,11 @@ std::string restart_line(HDC dc, int width) {
 /// A row on its tab: the Cheats one only with cheats on, the DLSS model only in a build with DLSS (the Upscaler in every one)
 bool row_shown(int i) {
     return (i != kCheatsRow || cheats_enabled) && (rows[i].value != &opts.dlss || ur::upscaler_shown()) &&
-           (rows[i].value != &opts.dlss_model || ur::model_shown(dlss_built()));
+           (rows[i].value != &opts.dlss_model || ur::model_shown(dlss_built())) &&
+           (rows[i].value != &opts.fg_kind || dlss_built()) &&   // (relink: the Frame generator row in a build with DLSS)
+           // (relink, 0.7.9.3: one Sharpness row: DLSS's, DLAA's and FSR's own value while one of them is chosen)
+           (rows[i].value != &opts.sharpness || !up_sharpened()) && (rows[i].value != &opts.up_sharpness || up_sharpened()) &&
+           rows[i].value != &opts.menu_dark;   // (ReLink-R: one look, its night; no Menu look row)
 }
 int tab_row_count(int t) {
     int c = 0;
@@ -836,14 +961,15 @@ const char* row_group(int i, int* place) {
     static const struct { const char* name; const char* group; int place; } groups[] = {
         {"Fullscreen", "DISPLAY", 1}, {"HDR", "DISPLAY", 1}, {"GPU device", "DISPLAY", 1}, {"Output resolution", "DISPLAY", 1},
         {"Handheld profile", "DISPLAY", 1}, {"Ultrawide", "DISPLAY", 1}, {"Field of view", "DISPLAY", 1},
-        {"Upscaler", "UPSCALING", 2}, {"DLSS model", "UPSCALING", 2}, {"Render resolution", "UPSCALING", 2},
+        {"Upscaler", "UPSCALING", 2}, {"DLSS model", "UPSCALING", 2}, {"FSR version", "UPSCALING", 2},
+        {"Render resolution", "UPSCALING", 2},
         {"Window scaling filter", "UPSCALING", 2}, {"Sharpness", "UPSCALING", 2},
-        {"Frame generation", "SMOOTHNESS", 3}, {"Frame pacing", "SMOOTHNESS", 3}, {"V-Sync", "SMOOTHNESS", 3}, {"Low latency", "SMOOTHNESS", 3},
+        {"Frame generation", "SMOOTHNESS", 3}, {"Frame generator", "SMOOTHNESS", 3}, {"Frame pacing", "SMOOTHNESS", 3}, {"V-Sync", "SMOOTHNESS", 3}, {"Low latency", "SMOOTHNESS", 3},
         {"Robust buffers", "ADVANCED", 4},
         {"Volume", "SOUND", 1}, {"Audio output", "SOUND", 1}, {"Microphone", "SOUND", 1},
         {"Item wheel", "ITEMS", 2}, {"Cycle items", "ITEMS", 2},
         {"Menu key", "KEYBOARD", 3}, {"Screenshot key", "KEYBOARD", 3}, {"Fullscreen key", "KEYBOARD", 3},
-        {"Quit game", "MORE", 4}, {"Cheats", "MORE", 4},
+        {"Menu look", "MORE", 4}, {"Quit game", "MORE", 4}, {"Cheats", "MORE", 4},
         {"Controller in background", "PAD", 0}, {"Rumble strength", "PAD", 0}, {"Left stick dead zone", "PAD", 0},
         {"Right stick dead zone", "PAD", 0}, {"Layout preset", "PAD", 0}, {"Button prompts", "PAD", 0}, {"Controls", "PAD", 0},
         {"Mouse camera", "MOUSE", 1}, {"Mouse sensitivity", "MOUSE", 1}, {"Invert mouse vertical", "MOUSE", 1},
@@ -889,7 +1015,7 @@ bool menu_refresh = false;
 int hover_tab = -1;
 int drag_row = -1;
 bool mouse_read = false;   // (the menu has read the mouse since it opened)
-bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume; }
+bool is_slider(const Row& r) { return r.value == &opts.sharpness || r.value == &opts.up_sharpness || r.value == &opts.mouse_sens || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.volume; }
 /// (a scale: the arrows, a click and the wheel stop at its ends; Rumble strength would go from Off to its strongest)
 bool stops_at_ends(const Row& r) { return r.value == &opts.mouse_sens || r.value == &opts.rumble || r.value == &opts.gyro_sens_x || r.value == &opts.gyro_sens_y || r.value == &opts.deadzone_l || r.value == &opts.deadzone_r || r.value == &opts.fov || r.value == &opts.volume; }
 /// (the ini's Rumble strength on the menu's steps: 0 to 150, the nearest 25)
@@ -906,6 +1032,7 @@ const char* ini_key(const Row& r) {
     if (r.value == &opts.resolution) return "resolution";
     if (r.value == &opts.upscale) return "upscaling";
     if (r.value == &opts.dlss) return "dlss";   // (as opts.dlss and RX_VK_DLSS)
+    if (r.value == &opts.up_sharpness) return "upscaler_sharpness";   // (relink, 0.7.9.3: the Sharpness row under DLSS or FSR)
     static char k[32];
     size_t n = 0;
     for (const char* p = r.name; *p && n + 1 < sizeof k; p++) k[n++] = *p == ' ' ? '_' : (char)tolower(*p);
@@ -1019,7 +1146,7 @@ void save() {
             const char* eq = strchr(line, '=');
             if (!eq || line[0] == '#') continue;
             const std::string key(line, (size_t)(eq - line));
-            bool mine = key == "microphone_device" || key == "hdr_paper_white" || key == "options_version";
+            bool mine = key == "microphone_device" || key == "hdr_paper_white" || key == "options_version" || key == "pacing_rev";
             for (const Row& r : rows) mine |= r.value && key == ini_key(r);
             if (mine) continue;
             std::string text(line);
@@ -1037,6 +1164,9 @@ void save() {
         // (2: game_speed below 2 was only ever the old default, see menu_init; 3: the mouse's buttons are bindings, see
         // host/nn_hid.c binds_load)
         fprintf(f, "options_version=3\n");
+        // (relink, 0.7.9.3: frame_pacing above is a choice made since the row paces the game's frames alone; see menu_init. The
+        // launcher writes it too. Not a step of options_version: host/nn_hid.c reads that one for the bindings)
+        fprintf(f, "pacing_rev=1\n");
         for (const auto& o : others) fputs(o.second.c_str(), f);
         if (!can_bind()) fputs(kept.c_str(), f);
         for (int i = 0; i < HOS_KEY_N && can_bind(); i++) {   // (the keys-only controls, HOS_KEY_*, have no pad_ line)
@@ -1216,10 +1346,14 @@ void gdi_draw(Bitmap& out, uint32_t w, uint32_t h, void (*paint)(HDC, uint32_t, 
     paint(dc, w, h, scale);
     paint_bits = nullptr;
     GdiFlush();
-    if (const char* dir = &out == &menu_bmp ? getenv("RX_VK_MENU_DUMP") : nullptr) {   // (test runs: each drawing of the menu, as menu_<n>.bmp)
+    // (test runs: each drawing of the menu, as menu_<n>.bmp; RX_VK_FPS_DUMP: the FPS counter's, as fps_<n>.bmp, 200 of them)
+    const bool fps_out = &out == &fps_bmp;
+    static int fps_dumped = 0;
+    if (const char* dir = &out == &menu_bmp ? getenv("RX_VK_MENU_DUMP") : fps_out && fps_dumped < 200 ? getenv("RX_VK_FPS_DUMP") : nullptr) {
         static int n = 0;
         char path[1024];
-        snprintf(path, sizeof path, "%s/menu_%03d.bmp", dir, n++);
+        if (fps_out) snprintf(path, sizeof path, "%s/fps_%03d.bmp", dir, fps_dumped++);
+        else snprintf(path, sizeof path, "%s/menu_%03d.bmp", dir, n++);
         if (FILE* f = fopen(path, "wb")) {   // (the 14-byte file header and the 40-byte info header, little-endian: 32-bit, top-down)
             uint8_t hd[54] = {'B', 'M'};
             auto put = [&](int at, uint32_t v, int bytes) { for (int i = 0; i < bytes; i++) hd[at + i] = (uint8_t)(v >> (8 * i)); };
@@ -1319,6 +1453,10 @@ struct TabLook { COLORREF strip, on, tint, edge; };
 constexpr TabLook kTabs[3] = {{RGB(0x6A, 0x5A, 0xE6), RGB(255, 255, 255), RGB(0x2B, 0x27, 0x66), RGB(0xE2, 0xBE, 0x5A)},
                               {RGB(0x4B, 0x3C, 0xC4), RGB(255, 255, 255), RGB(0x26, 0x22, 0x52), RGB(0xE2, 0xBE, 0x5A)},
                               {RGB(0x3F, 0x37, 0xA0), RGB(255, 255, 255), RGB(0x22, 0x20, 0x4E), RGB(0xE2, 0xBE, 0x5A)}};
+// (ReLink-R) the tag's edge and the words on the yellow; one look only, ReLink-R's night: Project ReLink's Menu look row (light or
+// dark cartridge, opts.menu_dark) is not shown and set_look keeps these colours
+constexpr COLORREF kTagEdge = RGB(0xE3, 0xC4, 0x74), kOnYellow = RGB(0x1A, 0x15, 0x30);
+inline void set_look(bool) {}
 COLORREF mix(COLORREF a, COLORREF b, float t) {
     const auto ch = [t](int x, int y) { return (int)std::lround(x + (y - x) * t); };
     return RGB(ch(GetRValue(a), GetRValue(b)), ch(GetGValue(a), GetGValue(b)), ch(GetBValue(a), GetBValue(b)));
@@ -1521,7 +1659,11 @@ void picture_worker() {
                 count = (int)teleport_captures.size();
             }
             logf("menu: Travel picture of %s (%s) taken (%d in memory)%s", place.label, place.key, count, saved ? "" : "; not saved");
-            if (saved) {   // (the line over the game for 2.5 s)
+            // (0.7.9.3, a suggestion on the Discord, 19/11: "being able to turn off the popups as I travel around would be
+            // great. They're pretty annoying") The picture is taken and kept as before; the line over the game is no longer
+            // shown unless asked for: RX_VK_TRAVEL_NOTICE=1. The log has the line above either way
+            static const bool notice = getenv("RX_VK_TRAVEL_NOTICE") && atoi(getenv("RX_VK_TRAVEL_NOTICE")) != 0;
+            if (saved && notice) {   // (the line over the game for 2.5 s)
                 snprintf(notice_text, sizeof notice_text, "Travel picture saved: %s", place.label);
                 notice_new.store(true, std::memory_order_release);
                 notice_until.store(prof_now() + 2500000000LL, std::memory_order_relaxed);
@@ -1801,7 +1943,7 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     HGDIOBJ old = SelectObject(dc, small);
     if (pending) {
         startup_gdi::round_rect(dc, lx + P(12), pend_top + P(3), lw - P(24), P(kOptPendH) - P(8), P(8), kTag);
-        SetTextColor(dc, kTagInk);
+        SetTextColor(dc, cart::kTagInk);
         const std::string line = restart_line(dc, lw - P(48)) + " (when the menu closes)";
         TextOutA(dc, lx + P(24), pend_top + P(3) + (P(kOptPendH) - P(8) - text_h(dc)) / 2, line.c_str(), (int)line.size());
     }
@@ -2792,7 +2934,7 @@ void paint_controls_cart(HDC dc, uint32_t w, uint32_t h) {
                 SelectObject(dc, cell_b);
                 const int pw = text_w(dc, v) + P(22), ph = P(24);
                 startup_gdi::round_rect(dc, x - P(10), mid - ph / 2, pw, ph, ph / 2, listening ? kYellow : look.strip);
-                SetTextColor(dc, listening ? kInk : look.on);
+                SetTextColor(dc, listening ? kOnYellow : look.on);
                 TextOutA(dc, x + P(1), mid - text_h(dc) / 2, v.c_str(), (int)v.size());
             } else {
                 SelectObject(dc, cell_f);
@@ -2862,6 +3004,7 @@ void controls_size(uint32_t w, uint32_t h, uint32_t* mw, uint32_t* mh) {
 }
 
 void paint_menu(HDC dc, uint32_t w, uint32_t h, int s) {
+    cart::set_look(opts.menu_dark != 0);   // (relink: the Menu look row)
     if (page == 0) return paint_options(dc, w, h);   // (relink: the cartridge)
     if (page == 2) return paint_cheats(dc, w, h);
     if (page == 3 || page == 4) return paint_list(dc, w, h, page == 4);
@@ -2876,7 +3019,7 @@ void paint_menu(HDC dc, uint32_t w, uint32_t h, int s) {
     // the Controls tab's blue for the controls, yellow for the restart question and red for Quit game's
     const int look = page == 5 ? (ask_quit ? 0 : -1) : page == 1 ? 2 : 1;
     const COLORREF strip = look < 0 ? cart::kYellow : cart::kTabs[look].strip, tint = look < 0 ? cart::kTag : cart::kTabs[look].tint,
-                   edge = look < 0 ? RGB(0xE3, 0xC4, 0x74) : cart::kTabs[look].edge, on = look < 0 ? cart::kTagInk : cart::kTabs[look].on;
+                   edge = look < 0 ? cart::kTagEdge : cart::kTabs[look].edge, on = look < 0 ? cart::kOnYellow : cart::kTabs[look].on;
     const char* heading = page == 6 ? "Travel" : page == 5 ? (ask_quit ? "Quit game" : "Restart needed") : page == 4 ? "Inventory" : page == 3 ? "Teleport"
                         : page == 2 ? "Cheats" : "Controls";
     cart_page(dc, (int)w, (int)h, s, heading, strip, on);
@@ -2952,6 +3095,7 @@ HFONT hard_font(int px, int weight) {
 /// (relink) The Travel page's notice over the game: a picture was saved
 void paint_notice(HDC dc, uint32_t w, uint32_t h, int s) {
     // (relink) a small label of the cartridge: the shell's edge, the cream, a green strip at its left (see-through corners)
+    cart::set_look(opts.menu_dark != 0);
     fill(dc, 0, 0, (int)w, (int)h, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, (int)w, (int)h, 8 * s, cart::kShell);
     startup_gdi::round_rect(dc, 3 * s, 3 * s, (int)w - 6 * s, (int)h - 6 * s, 6 * s, cart::kLabel);
@@ -3023,6 +3167,230 @@ void redraw_menu(int s) {
 
 std::atomic<int64_t> game_frames{0}, shown_frames{0};
 int cur_scale = 1;
+
+// (relink) The FPS counter's Detailed look: the frame rate, the frame times of the last second and a graph of the last ones, the
+// 1% low of the last 10 seconds (the frame time 99% of frames are under, as a rate), the GPU's time a game frame and how busy it
+// kept the GPU, the video memory against the driver's allowance, the CPU (this game, and the whole PC) and the RAM. Read every
+// half second on the menu's thread; the frame times come from menu_note_frame, on the thread that presents
+namespace fps_detail {
+constexpr uint32_t kRing = 8192;   // (presents: 27 s at 300 fps)
+std::atomic<int64_t> ring[kRing];
+std::atomic<uint32_t> ring_n{0};
+/// A frame shown, at now (one thread presents at a time: the replay's, or frame generation's)
+void note(int64_t now) {
+    const uint32_t i = ring_n.load(std::memory_order_relaxed);
+    ring[i % kRing].store(now, std::memory_order_relaxed);
+    ring_n.store(i + 1, std::memory_order_release);
+}
+constexpr int kGraph = 120;
+struct Stats {
+    double fps = 0, game = 0, frame_ms = 0, max_ms = 0, low1 = 0;
+    double gpu_ms = -1, gpu_busy = -1;             // (-1: not known yet)
+    double vram_used = -1, vram_allowed = -1;      // (GB)
+    double cpu = -1, cpu_all = -1;                 // (percent of the whole CPU)
+    double ram = -1, ram_total = -1, ram_load = -1;
+    int graph_n = 0;
+    float graph[kGraph] = {};                      // (the last frame times, ms, the oldest first)
+};
+Stats stats;
+constexpr double kGB = 1073741824.0;
+/// The frame times of the last 10 s, oldest first, from the presents' ring
+void frame_times(int64_t now, std::vector<float>& out) {
+    out.clear();
+    const uint32_t n = ring_n.load(std::memory_order_acquire), have = std::min(n, kRing);
+    int64_t prev = 0;
+    for (uint32_t k = n - have; k != n; k++) {
+        const int64_t t = ring[k % kRing].load(std::memory_order_relaxed);
+        if (prev && t > prev && now - t <= 10'000'000'000LL) out.push_back((float)((t - prev) / 1e6));
+        prev = t;
+    }
+}
+void take(int64_t now, double shown, double game) {
+    Stats s;
+    s.fps = shown, s.game = game;
+    static std::vector<float> iv, sorted;
+    frame_times(now, iv);
+    if (!iv.empty()) {
+        double sum = 0, most = 0;   // (the last second's)
+        int n = 0;
+        for (size_t i = iv.size(); i-- > 0 && sum < 1000.0;) sum += iv[i], most = std::max(most, (double)iv[i]), n++;
+        s.frame_ms = sum / n, s.max_ms = most;
+        sorted = iv;
+        const size_t at = std::min(sorted.size() - 1, (size_t)(sorted.size() * 0.99));
+        std::nth_element(sorted.begin(), sorted.begin() + (ptrdiff_t)at, sorted.end());
+        s.low1 = sorted[at] > 0 ? 1000.0 / sorted[at] : 0;
+        s.graph_n = (int)std::min<size_t>(iv.size(), kGraph);
+        std::copy(iv.end() - s.graph_n, iv.end(), s.graph);
+    }
+    static int64_t l_t = 0, l_gpu = 0, l_frames = 0;
+    const int64_t gpu = replay_gpu_ns_total(), frames = game_frames.load(std::memory_order_relaxed);
+    if (l_t && frames > l_frames && gpu >= l_gpu) {
+        s.gpu_ms = (gpu - l_gpu) / 1e6 / (double)(frames - l_frames);
+        s.gpu_busy = std::min(100.0, (gpu - l_gpu) * 100.0 / (double)(now - l_t));
+    }
+    uint64_t used = 0, allowed = 0;
+    if (vram_usage_now(&used, &allowed) && allowed) s.vram_used = used / kGB, s.vram_allowed = allowed / kGB;
+#if defined(_WIN32)
+    static uint64_t l_proc = 0, l_idle = 0, l_total = 0;
+    const auto ft = [](const FILETIME& f) { return (uint64_t)f.dwHighDateTime << 32 | f.dwLowDateTime; };   // (100 ns)
+    static const double cpus = [] { SYSTEM_INFO si{}; GetSystemInfo(&si); return (double)std::max<DWORD>(1, si.dwNumberOfProcessors); }();
+    FILETIME c{}, e{}, k{}, u{};
+    if (GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u)) {
+        const uint64_t p = ft(k) + ft(u);
+        if (l_t && now > l_t) s.cpu = std::min(100.0, (p - l_proc) * 100.0 * 100.0 / (double)(now - l_t) / cpus);
+        l_proc = p;
+    }
+    FILETIME si{}, sk{}, su{};
+    if (GetSystemTimes(&si, &sk, &su)) {   // (the kernel's time counts the idle time too)
+        const uint64_t idle = ft(si), total = ft(sk) + ft(su);
+        if (l_total && total > l_total) s.cpu_all = std::clamp(100.0 * (1.0 - (double)(idle - l_idle) / (double)(total - l_total)), 0.0, 100.0);
+        l_idle = idle, l_total = total;
+    }
+    PROCESS_MEMORY_COUNTERS pm{};
+    pm.cb = sizeof pm;
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pm, sizeof pm)) s.ram = pm.WorkingSetSize / kGB;
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof ms;
+    if (GlobalMemoryStatusEx(&ms)) s.ram_total = ms.ullTotalPhys / kGB, s.ram_load = ms.dwMemoryLoad;
+#else
+    static uint64_t l_proc = 0;
+    static const double cpus = (double)std::max(1L, sysconf(_SC_NPROCESSORS_ONLN));
+    rusage ru{};
+    if (!getrusage(RUSAGE_SELF, &ru)) {   // (microseconds)
+        const uint64_t p = (uint64_t)(ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1000000u + (uint64_t)(ru.ru_utime.tv_usec + ru.ru_stime.tv_usec);
+        if (l_t && now > l_t) s.cpu = std::min(100.0, (p - l_proc) * 100.0 * 1000.0 / (double)(now - l_t) / cpus);
+        l_proc = p;
+    }
+    if (FILE* f = fopen("/proc/self/statm", "r")) {
+        long size = 0, resident = 0;
+        if (fscanf(f, "%ld %ld", &size, &resident) == 2) s.ram = resident * (double)sysconf(_SC_PAGESIZE) / kGB;
+        fclose(f);
+    }
+    if (FILE* f = fopen("/proc/meminfo", "r")) {
+        char key[64];
+        long kb = 0, total = 0, avail = -1;
+        while (fscanf(f, "%63s %ld kB", key, &kb) == 2) {
+            if (!strcmp(key, "MemTotal:")) total = kb;
+            else if (!strcmp(key, "MemAvailable:")) avail = kb;
+        }
+        fclose(f);
+        if (total > 0) s.ram_total = total * 1024.0 / kGB;
+        if (total > 0 && avail >= 0) s.ram_load = 100.0 * (1.0 - (double)avail / total);
+    }
+#endif
+    l_t = now, l_gpu = gpu, l_frames = frames;
+    stats = s;
+}
+/// The GPU's name without its maker's brand ("NVIDIA GeForce RTX 3060 Ti": "RTX 3060 Ti")
+const char* gpu_short_name() {
+    static char name[64] = "";
+    if (!name[0]) {
+        const char* n = dev.props.deviceName;
+        for (const char* brand : {"NVIDIA GeForce ", "NVIDIA ", "AMD Radeon ", "AMD ", "Intel(R) "})
+            if (!strncmp(n, brand, strlen(brand))) { n += strlen(brand); break; }
+        snprintf(name, sizeof name, "%s", n);
+    }
+    return name;
+}
+constexpr int kWidth = 250, kPad = 12, kHeader = 38, kGraphH = 34, kRowH = 19, kFooter = 16;
+int rows_shown() { return 5 + (opts.framegen >= 2 ? 1 : 0); }
+uint32_t height(int s) { return (uint32_t)(s * (kPad + kHeader + kGraphH + 10 + rows_shown() * kRowH + 4 + kFooter + kPad - 4)); }
+/// The panel: the corners see-through (black), the rest drawn over
+void paint(HDC dc, uint32_t w, uint32_t h, int s) {
+    const Stats& st = stats;
+    const COLORREF panel = RGB(17, 21, 18), well = RGB(11, 14, 12), rule = RGB(40, 48, 42), green = RGB(72, 255, 110),
+                   label = RGB(146, 160, 150), value = RGB(238, 242, 238), amber = RGB(255, 184, 72), red = RGB(255, 90, 78);
+    fill(dc, 0, 0, (int)w, (int)h, RGB(0, 0, 0));
+    startup_gdi::round_rect(dc, 0, 0, (int)w, (int)h, 10 * s, panel);
+    fill(dc, 0, 10 * s, 3 * s, (int)h - 20 * s, green);   // (a thin green edge on the left, the counter's colour)
+    SetBkMode(dc, TRANSPARENT);
+    const int pad = kPad * s, right = (int)w - pad;
+    HFONT big = font(30 * s, FW_BOLD), mid = font(14 * s, FW_SEMIBOLD), small = font(12 * s, FW_NORMAL);
+    HGDIOBJ old = SelectObject(dc, big);
+    char t[64];
+    // the frame rate, large, and the 1% low on the right
+    snprintf(t, sizeof t, "%.0f", st.fps);
+    SetTextAlign(dc, TA_LEFT | TA_TOP);
+    SetTextColor(dc, green);
+    TextOutA(dc, pad, pad - 4 * s, t, (int)strlen(t));
+    SIZE sz{};
+    GetTextExtentPoint32A(dc, t, (int)strlen(t), &sz);
+    SelectObject(dc, mid);
+    TextOutA(dc, pad + sz.cx + 5 * s, pad + 13 * s, "FPS", 3);
+    SetTextAlign(dc, TA_RIGHT | TA_TOP);
+    SelectObject(dc, small);
+    SetTextColor(dc, label);
+    TextOutA(dc, right, pad, "1% low", 6);
+    snprintf(t, sizeof t, "%.0f", st.low1);
+    SelectObject(dc, mid);
+    SetTextColor(dc, st.low1 > 0 && st.low1 < st.fps * 0.5 ? amber : value);
+    TextOutA(dc, right, pad + 14 * s, t, (int)strlen(t));
+    // the graph of the last frame times: a bar each, amber past 1.5 times the median, red past 2.5 times; a line at 60 fps
+    const int gx = pad, gy = pad + kHeader * s, gw = (int)w - 2 * pad, gh = kGraphH * s;
+    startup_gdi::round_rect(dc, gx, gy, gw, gh, 4 * s, well);
+    if (st.graph_n > 1) {
+        float sorted[kGraph];
+        std::copy(st.graph, st.graph + st.graph_n, sorted);
+        std::nth_element(sorted, sorted + st.graph_n / 2, sorted + st.graph_n);
+        const float median = sorted[st.graph_n / 2];
+        float top = 0;
+        for (int i = 0; i < st.graph_n; i++) top = std::max(top, st.graph[i]);
+        top = std::clamp(std::max(top * 1.15f, median * 2.0f), 8.0f, 100.0f);
+        const float bar = (float)(gw - 4 * s) / kGraph;
+        if (16.67f < top) fill(dc, gx + 2 * s, gy + gh - 2 * s - (int)((gh - 4 * s) * 16.67f / top), gw - 4 * s, std::max(1, s / 2), rule);
+        for (int i = 0; i < st.graph_n; i++) {
+            const float v = std::min(st.graph[i], top);
+            const int bh = std::max(s, (int)((gh - 4 * s) * v / top));
+            const int x0 = gx + 2 * s + (int)((kGraph - st.graph_n + i) * bar), x1 = gx + 2 * s + (int)((kGraph - st.graph_n + i + 1) * bar);
+            const COLORREF c = st.graph[i] > median * 2.5f ? red : st.graph[i] > median * 1.5f ? amber : green;
+            fill(dc, x0, gy + gh - 2 * s - bh, std::max(1, x1 - x0 - (bar >= 2.5f * s ? 1 : 0)), bh, c);
+        }
+    }
+    // the rows: a label on the left, its values on the right
+    int y = gy + gh + 10 * s;
+    const auto row = [&](const char* name, const char* text, COLORREF c) {
+        SelectObject(dc, small);
+        SetTextAlign(dc, TA_LEFT | TA_TOP);
+        SetTextColor(dc, label);
+        TextOutA(dc, pad, y + s, name, (int)strlen(name));
+        SelectObject(dc, mid);
+        SetTextAlign(dc, TA_RIGHT | TA_TOP);
+        SetTextColor(dc, c);
+        TextOutA(dc, right, y, text, (int)strlen(text));
+        y += kRowH * s;
+    };
+    snprintf(t, sizeof t, "%.1f ms  max %.1f", st.frame_ms, st.max_ms);
+    row("Frame time", t, st.max_ms > st.frame_ms * 2.5 ? amber : value);
+    if (st.gpu_ms >= 0) snprintf(t, sizeof t, "%.1f ms  %.0f%%", st.gpu_ms, st.gpu_busy);
+    else snprintf(t, sizeof t, "-");
+    row("GPU", t, st.gpu_busy >= 97 ? amber : value);
+    if (st.vram_used >= 0) snprintf(t, sizeof t, "%.1f / %.1f GB", st.vram_used, st.vram_allowed);
+    else snprintf(t, sizeof t, "-");
+    row("VRAM", t, st.vram_used > st.vram_allowed ? red : st.vram_used > st.vram_allowed * 0.9 ? amber : value);
+    if (st.cpu >= 0 && st.cpu_all >= 0) snprintf(t, sizeof t, "%.0f%%  all %.0f%%", st.cpu, st.cpu_all);
+    else if (st.cpu >= 0) snprintf(t, sizeof t, "%.0f%%", st.cpu);
+    else snprintf(t, sizeof t, "-");
+    row("CPU", t, value);
+    if (st.ram >= 0 && st.ram_total > 0) snprintf(t, sizeof t, "%.1f GB  %.0f%% of %.0f", st.ram, st.ram_load, st.ram_total);
+    else if (st.ram >= 0) snprintf(t, sizeof t, "%.1f GB", st.ram);
+    else snprintf(t, sizeof t, "-");
+    row("RAM", t, st.ram_load >= 90 ? amber : value);
+    if (opts.framegen >= 2) {
+        snprintf(t, sizeof t, "%.0f fps", st.game);
+        row("Game", t, value);
+    }
+    // the GPU's name, small, at the bottom
+    fill(dc, pad, y + 2 * s, (int)w - 2 * pad, std::max(1, s / 2), rule);
+    SelectObject(dc, small);
+    SetTextAlign(dc, TA_LEFT | TA_TOP);
+    SetTextColor(dc, label);
+    TextOutA(dc, pad, y + 5 * s, gpu_short_name(), (int)strlen(gpu_short_name()));
+    SelectObject(dc, old);
+    DeleteObject(big);
+    DeleteObject(mid);
+    DeleteObject(small);
+}
+} // namespace fps_detail
 
 struct Upload {
     VkBuffer buf = VK_NULL_HANDLE;
@@ -3147,7 +3515,7 @@ void menu_init() {
         has_options = true;
         char line[80];
         bool has_resolution = false;
-        bool v2 = false;
+        bool v2 = false, pacing_rev = false, up_sharp = false;
         int old_dynres = -1;   // (the row before Resolution: 0, the full scale, is its 100%; 1 is Auto)
         while (fgets(line, sizeof line, f)) {
             char* eq = strchr(line, '=');
@@ -3160,6 +3528,8 @@ void menu_init() {
             }
             has_resolution |= !strcmp(line, "resolution");
             v2 |= !strcmp(line, "options_version");
+            pacing_rev |= !strcmp(line, "pacing_rev");
+            up_sharp |= !strcmp(line, "upscaler_sharpness");
             if (!strcmp(line, "dynamic_resolution")) old_dynres = atoi(eq + 1);
             if (!strcmp(line, "hdr_paper_white")) opts.hdr_paper_white = std::clamp(atoi(eq + 1), 80, 500);   // (relink: HDR)
             if (!strcmp(line, "microphone_device")) {   // (relink: the microphone, by its name)
@@ -3184,6 +3554,15 @@ void menu_init() {
         // (Game speed is Real time by default now: Per frame played at half speed at 30 fps, the "slow motion" players
         // reported. An options file from before kept the old default whether chosen or not: Real time for it too)
         if (!v2) opts.realtime = 1;
+        // (relink, 0.7.9.3) Frame pacing paces the game's frames alone now (vk_framegen.cpp pace_only) and is on by default. In
+        // an options file from before, with frame generation off, the row did nothing: its saved "off" was no one's choice, and
+        // it is on for that file too, until the file is saved with pacing_rev (here or by the launcher), which says the row's
+        // value was seen as it works now. With frame generation on, the row did what it does: left as saved
+        if (!pacing_rev && opts.framegen == 0) opts.pace = 1;
+        // (relink, 0.7.9.3) a file from before DLSS's, DLAA's and FSR's own Sharpness gets their default, 40 %, whatever the old
+        // row said: the hints advised 80 % for a softer input than they are given now (the composite before SMAA), so a value
+        // carried over would sharpen twice as much as it did (the user's choice, 22/11)
+        (void)up_sharp;
     }
     // An opt-in profile for 4 GB cards: keep existing options authoritative, but make a first run usable on
     // low-VRAM hardware without requiring the menu to render first.
@@ -3271,6 +3650,7 @@ void menu_note_present_sizes(uint32_t picture_w, uint32_t picture_h, uint32_t wi
     present_sizes.store(c(picture_w) << 48 | c(picture_h) << 32 | c(window_w) << 16 | c(window_h), std::memory_order_relaxed);
 }
 void menu_note_frame(bool game_frame) {
+    if (opts.show_fps >= 2) fps_detail::note(prof_now());   // (relink: the detailed counter's frame times)
     shown_frames.fetch_add(1, std::memory_order_relaxed);
     if (game_frame) game_frames.fetch_add(1, std::memory_order_relaxed);
 }
@@ -3388,8 +3768,28 @@ void item_reveal() {
     if (line >= item_scroll + kTeleportLines) item_scroll = line - kTeleportLines + 1;
     item_scroll = std::max(0, std::min(item_scroll, kItems + kItemSections - kTeleportLines));
 }
+// (relink, Discord 17/11: "The game freezes for a few seconds the first time I open the menu") What the menu's first
+// opening asked for on the render thread, asked ahead on a thread of its own, a few seconds into the game: NGX (whether the
+// Upscaler row can offer DLSS: NVIDIA's runtime loaded and started, seconds on some PCs) and the microphones (SDL's first
+// listing of the recording devices). The opening still asks again (cheap then: NGX is asked once, the list is the
+// system's as it is now)
+void warm_up() {
+    static int ticks;
+    if (ticks > 240) return;
+    if (++ticks != 240 || !dev.device) return;
+    std::thread([] {
+        const int64_t t0 = prof_now();
+        dlss_probe();
+        const int64_t t1 = prof_now();
+        if (can_mic()) host->mic_count();
+        logf("menu: made ready for its first opening (NVIDIA's DLSS asked %.0f ms, the microphones listed %.0f ms)",
+             (double)(t1 - t0) / 1e6, (double)(prof_now() - t1) / 1e6);
+    }).detach();
+}
+
 void menu_tick() {
     fullscreen_tick();
+    warm_up();
     {   // (relink) V-Sync changed: the swapchain made again at its next present, in the mode it now asks for (vk_main.cpp)
         static int applied = -1;
         if (applied < 0) applied = opts.vsync;
@@ -3514,9 +3914,18 @@ void menu_tick() {
         page = 0, listening = 0;
         // (the layout row shows the controls as they are: host/nn_hid.c keeps them, the ini's pad_ lines, and a saved
         // layout is not applied over them at start)
-        if (open_now.load()) opts.pad_layout = detect_pad_layout();
-        if (open_now.load()) dlss_probe();   // (whether the Upscaler row can offer DLSS here: NGX asked once)
-        if (open_now.load()) refresh_mics();   // (the microphones as they are now)
+        if (open_now.load()) {
+            const int64_t t0 = prof_now();
+            opts.pad_layout = detect_pad_layout();
+            const int64_t t1 = prof_now();
+            dlss_probe();   // (whether the Upscaler row can offer DLSS here: NGX asked once, warm_up asked it ahead)
+            const int64_t t2 = prof_now();
+            refresh_mics();   // (the microphones as they are now)
+            const int64_t t3 = prof_now();
+            if (t3 - t0 > 50000000LL)   // (an opening that held the game: what took the time)
+                logf("menu: the opening took %.0f ms (controls %.0f, DLSS %.0f, microphones %.0f)", (double)(t3 - t0) / 1e6,
+                     (double)(t1 - t0) / 1e6, (double)(t2 - t1) / 1e6, (double)(t3 - t2) / 1e6);
+        }
     }
     if (open_now.load() && page == 5) {   // (relink) the restart question: Later (the default) or Restart now
         if (mouse) {   // (a button under the cursor chosen, a click on it pressed; the wheel changes it, a right click is Later)
@@ -3929,11 +4338,16 @@ void menu_tick() {
         const int64_t now = prof_now();
         double shown = 0, game = 0;
         if (fps_take(now, shown_frames.load(), game_frames.load(), &next, &last_shown, &last_game, &shown, &game)) {
-            snprintf(fps_text, sizeof fps_text, "%.0f", shown);
-            if (opts.framegen >= 2) snprintf(fps_sub, sizeof fps_sub, "game %.0f", game);
-            else fps_sub[0] = 0;
             fps_bmp.keyed = true;
-            gdi_draw(fps_bmp, 120u * scale, 54u * scale, paint_fps, scale);
+            if (opts.show_fps >= 2) {   // (relink: Detailed, a panel of its own)
+                fps_detail::take(now, shown, game);
+                gdi_draw(fps_bmp, fps_detail::kWidth * scale, fps_detail::height(scale), fps_detail::paint, scale);
+            } else {
+                snprintf(fps_text, sizeof fps_text, "%.0f", shown);
+                if (opts.framegen >= 2) snprintf(fps_sub, sizeof fps_sub, "game %.0f", game);
+                else fps_sub[0] = 0;
+                gdi_draw(fps_bmp, 120u * scale, 54u * scale, paint_fps, scale);
+            }
         }
     }
     if (notice_new.exchange(false, std::memory_order_acq_rel)) {   // (relink: the Travel page's "picture saved" line)

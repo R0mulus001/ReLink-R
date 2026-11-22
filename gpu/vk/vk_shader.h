@@ -26,8 +26,11 @@ struct Stage {
 };
 
 /// A texture handle the stage reads from a storage buffer: its handle program (Shader::Info::handle_programs, Eden's
-/// recompiler) run over the stage's constant banks and storage buffers as the draw has them
-uint32_t stage_handle(const NvnState& s, const Stage& st, uint32_t program);
+/// recompiler) run over the stage's constant banks and storage buffers as the draw has them. slot: the array slot of a
+/// lookup table's program (Shader::HandleOp::Slot), whose slot k is the table's entry k
+uint32_t stage_handle(const NvnState& s, const Stage& st, uint32_t program, uint32_t slot = 0);
+/// (relink) The handles of slots 0 .. count-1 of a lookup table's program, into out, reading its constant words once
+void stage_handles(const NvnState& s, const Stage& st, uint32_t program, uint32_t count, uint32_t* out);
 void handle_memo_next();   // (relink) a new draw or dispatch on this thread: the handles kept for the last one go
 
 /// A translated program variant: its stages, in descriptor order. The pipeline layout and pipelines made for it live
@@ -117,6 +120,11 @@ struct KeptProgram {
 void program_cache_each(const std::function<void(const KeptProgram&)>& fn);
 void program_cache_borrow(uint64_t key, const std::function<void(Program&)>& fn);   // (made for fn, then let go; still kept)
 const Program* program_find(uint64_t key, uint64_t variant);
+/// (relink) a graphics program the game has just set: its stages' code keys as the state list names them, and its key for a
+/// record's vertex input and colour output types (false / 0: a compute program, or stages that cannot be read)
+void program_cache_fetch(uint64_t key, bool mesh, bool fallback);   // (its kept variants read now, as a draw's pick has them read)
+bool program_set_codes(const nvn_prog& prog, uint64_t code[4], bool* mesh);
+uint64_t program_set_key(const nvn_prog& prog, const uint32_t vattr[16], const uint8_t color_types[8]);
 /// (relink) The pipeline state list (vk_draw.cpp): a program by its stages' code keys (graphics: vertex, fragment; mesh: mesh,
 /// fragment, task) and the vertex inputs and colour output types it was drawn with, from the seed (seed_open first): translated
 /// and kept unless kept already (null then, or when it does not translate). *key_out: its key, 0 when a stage is not in the seed
