@@ -5,6 +5,13 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.4-dev** (on top of upstream 0.7.9.3): everything upstream 0.7.9.3 brings, among it frame pacing on by default (the
+  game's frames shown evenly, no frame generation), faster locks between the game's threads, the detailed FPS counter, FSR 4
+  and DLSS/DLAA/FSR's own Sharpness; ReLink-R keeps its one look (upstream's light/dark rows are not shown). ReLink-R is always
+  an install of its own: it never plays, updates nor builds into a folder holding Project ReLink's game (it builds into
+  Games\ReLink-R, or a ReLink-R folder beside a Project ReLink folder that was picked), and a 0.0.3-dev game folder named
+  ReLink is renamed ReLink-R. The Vulkan back end leaves out a compute barrier where the two dispatches touch nothing in
+  common (`RX_VK_DISPATCH_HAZARDS=0` turns it off).
 - **0.0.3-dev**: the look of the approved drafts, put together: the sword beside the launcher's name; the pages' titles on
   the panel instead of on strips of colour, the options' pages and their choices as rounded pills with the chosen one in gold,
   Home's cards with one thin edge, the links one readable violet; the install's number in gold over a sword lying down, its
