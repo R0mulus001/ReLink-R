@@ -50,6 +50,7 @@ public partial class MainWindow
         if (s.Folder != "") outPath = s.Folder;
         if (c == null) return;
         if (s.Folder == "" && !string.IsNullOrEmpty(c.Out)) outPath = c.Out;
+        if (Game.ProjectReLinks(outPath)) outPath = Settings.DefaultFolder;   // (ReLink-R 0.0.4: never into Project ReLink's folder)
         if (c.Romfs != null && c.Exefs != null && Directory.Exists(c.Romfs) && File.Exists(Path.Combine(c.Exefs, "main")))
         {
             romfs = c.Romfs;
@@ -322,7 +323,17 @@ public partial class MainWindow
 
     void BrowseOut(object sender, RoutedEventArgs e)
     {
-        outPath = PickFolder(L("Choisir où installer le jeu", "Choose where the game goes")) ?? outPath;
+        var picked = PickFolder(L("Choisir où installer le jeu", "Choose where the game goes"));
+        // (ReLink-R 0.0.4) a folder holding Project ReLink's game gets a ReLink-R folder of its own beside it, the two installs apart
+        if (picked != null && Game.ProjectReLinks(picked))
+        {
+            var beside = Path.Combine(Path.GetDirectoryName(picked.TrimEnd('\\', '/')) ?? picked, "ReLink-R");
+            MessageBox.Show(this, L($"Ce dossier contient le jeu de Project ReLink. ReLink-R s'installe à part, dans :\n{beside}",
+                                    $"That folder holds Project ReLink's game. ReLink-R installs on its own, in:\n{beside}"), "ReLink-R",
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+            picked = beside;
+        }
+        outPath = picked ?? outPath;
         Refresh();
     }
 

@@ -34,6 +34,11 @@ static class Game
         return null;
     }
 
+    /// (ReLink-R 0.0.4) The folder holds Project ReLink's game, not ReLink-R's: a build whose version is not one of ReLink-R's
+    /// (v0.0.x). ReLink-R never plays, updates nor builds into such a folder, so the two installs stay apart
+    public static bool ProjectReLinks(string? folder) =>
+        Installed(folder) && Version(folder!) is { } v && !v.StartsWith("v0.0.", StringComparison.Ordinal);
+
     /// The folder keeps the game files it was built from: an update needs nothing else
     public static bool KeepsGameFiles(string folder) =>
         Directory.Exists(Path.Combine(folder, ".relink_exefs")) && Directory.Exists(Path.Combine(folder, "romfs"));
@@ -164,7 +169,9 @@ sealed class Settings
         {
             folder, l.TryGetValue("game_folder", out var remembered) ? remembered : null, here, Path.GetDirectoryName(here), DefaultFolder,
         };
-        s.Folder = candidates.FirstOrDefault(Game.Installed) ?? "";
+        // (ReLink-R 0.0.4: a remembered folder that now holds Project ReLink's game is passed over: with none of ReLink-R's
+        // own, the install page builds into Games\ReLink-R)
+        s.Folder = candidates.FirstOrDefault(f => Game.Installed(f) && !Game.ProjectReLinks(f)) ?? "";
         if (s.Folder != "" && s.Folder != folder && RenameToOwnName(s.Folder) is { } renamed)
         {
             s.Folder = renamed;
