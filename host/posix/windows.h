@@ -47,7 +47,7 @@ typedef short SHORT;
 typedef unsigned short USHORT;
 typedef char CHAR;
 typedef wchar_t WCHAR;
-typedef void *HANDLE, *HMODULE, *HINSTANCE, *HWND, *HDC, *HGDIOBJ, *HBITMAP, *HFONT, *HBRUSH, *HICON, *HCURSOR, *HKEY;
+typedef void *HANDLE, *HMODULE, *HINSTANCE, *HWND, *HDC, *HGDIOBJ, *HBITMAP, *HFONT, *HBRUSH, *HICON, *HCURSOR, *HKEY, *HRGN;
 typedef void *PVOID, *LPVOID;
 typedef const void *LPCVOID;
 typedef char *LPSTR;
@@ -84,6 +84,9 @@ typedef struct { LONG cx, cy; } SIZE;
 #define LOWORD(l) ((WORD)((uintptr_t)(l) & 0xffff))
 #define HIWORD(l) ((WORD)(((uintptr_t)(l) >> 16) & 0xffff))
 #define RGB(r, g, b) ((COLORREF)(((BYTE)(r) | ((WORD)((BYTE)(g)) << 8)) | (((DWORD)(BYTE)(b)) << 16)))
+#define GetRValue(c) ((BYTE)(c))
+#define GetGValue(c) ((BYTE)(((WORD)(c)) >> 8))
+#define GetBValue(c) ((BYTE)((c) >> 16))
 #define UNREFERENCED_PARAMETER(x) ((void)(x))
 #define __declspec(x) RELINK_DECLSPEC_##x
 #define RELINK_DECLSPEC_dllexport __attribute__((visibility("default")))
@@ -513,6 +516,7 @@ static inline void *RtlVirtualUnwind(DWORD type, DWORD64 base, DWORD64 pc, PRUNT
 #define VK_F10 0x79
 #define VK_F11 0x7A
 #define VK_F12 0x7B
+#define VK_SCROLL 0x91
 #define VK_LSHIFT 0xA0
 #define VK_RSHIFT 0xA1
 #define VK_LCONTROL 0xA2
@@ -575,6 +579,7 @@ int MessageBoxA(HWND w, LPCSTR text, LPCSTR caption, UINT type);
 #define FW_MEDIUM 500
 #define FW_SEMIBOLD 600
 #define FW_BOLD 700
+#define FW_HEAVY 900
 #define DEFAULT_CHARSET 1
 #define OUT_DEFAULT_PRECIS 0
 #define CLIP_DEFAULT_PRECIS 0
@@ -604,6 +609,8 @@ HFONT CreateFontA(int height, int width, int escapement, int orientation, int we
                   LPCSTR face);
 HBRUSH CreateSolidBrush(COLORREF c);
 int FillRect(HDC dc, const RECT *r, HBRUSH b);
+HRGN CreateRectRgn(int x1, int y1, int x2, int y2);   /* (a rectangle: all the menu clips with) */
+int SelectClipRgn(HDC dc, HRGN rgn);                  /* (NULL: no clipping; FillRect and TextOutA keep to it) */
 int SetBkMode(HDC dc, int mode);
 COLORREF SetTextColor(HDC dc, COLORREF c);
 UINT SetTextAlign(HDC dc, UINT align);

@@ -23,7 +23,9 @@ layout(push_constant) uniform P {
     int base_vertex;
     uint pos, sets;          // (byte offsets in a vertex, the joint and weight sets: 1 or 2)
     uint joints[2], weights[2];
-    uint formats;            // (1: the position RGBA16F, else RGB32F; 2 << set: that set's joints RGBA8UI, else RGBA16UI)
+    uint formats;            // (1: the position RGBA16F, else RGB32F; 2 << set: that set's joints RGBA8UI, else RGBA16UI;
+                             // 8: the first set is one R8UI joint a vertex, at any byte, with no weights: weight 1;
+                             // 32: a rigid draw, no joint read: every vertex on bone 0, the object's world matrix)
     uint tolerance;          // (the fragment stage's)
 } pc;
 layout(location = 0) out vec4 before;
@@ -62,10 +64,20 @@ void main() {
     vec3 now = vec3(0.0), then = vec3(0.0);
     for (uint s = 0u; s < pc.sets; s++) {
         const uint a = vb.w[pc.joints[s] / 4u];
-        const uvec4 j = (pc.formats & (2u << s)) != 0u ? (uvec4(a, a >> 8, a >> 16, a >> 24) & 0xffu)
-                                                      : uvec4(a & 0xffffu, a >> 16, vb.w[pc.joints[s] / 4u + 1u] & 0xffffu,
-                                                              vb.w[pc.joints[s] / 4u + 1u] >> 16);
-        const vec4 wt = unpackUnorm4x8(vb.w[pc.weights[s] / 4u]);
+        uvec4 j;
+        vec4 wt;
+        if (s == 0u && (pc.formats & 32u) != 0u) {   // (a rigid draw: its one "bone" is the object's world matrix)
+            j = uvec4(0u);
+            wt = vec4(1.0, 0.0, 0.0, 0.0);
+        } else if (s == 0u && (pc.formats & 8u) != 0u) {   // (one joint a vertex, the whole vertex on it)
+            j = uvec4((a >> ((pc.joints[0] & 3u) * 8u)) & 0xffu, 0u, 0u, 0u);
+            wt = vec4(1.0, 0.0, 0.0, 0.0);
+        } else {
+            j = (pc.formats & (2u << s)) != 0u ? (uvec4(a, a >> 8, a >> 16, a >> 24) & 0xffu)
+                                               : uvec4(a & 0xffffu, a >> 16, vb.w[pc.joints[s] / 4u + 1u] & 0xffffu,
+                                                       vb.w[pc.joints[s] / 4u + 1u] >> 16);
+            wt = unpackUnorm4x8(vb.w[pc.weights[s] / 4u]);
+        }
         skin(Words(pc.bones[0]), j, wt, p, now);
         skin(Words(pc.bones[1]), j, wt, p, then);
     }

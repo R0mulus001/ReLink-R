@@ -84,6 +84,23 @@ inline bool reprojection(const float* current, const float* previous, float out[
     return true;
 }
 
+/// (relink, 0.7.9.3) A camera cut, from the reprojection (this frame's clip space to the frame before's): the middle of the
+/// picture, far away (three depths from the far hundredth of the depth range to its end), was off the picture in the frame
+/// before, or behind its camera. Turning the camera as fast as the stick allows moves those points a few hundredths of the
+/// picture a frame, and walking or riding does not move something that far at all; a cut in a cutscene, a door or a warp
+/// puts them somewhere else altogether. The upscaler's history is of another view then, and has to be dropped: kept, it
+/// is blended into the new view for several frames (ghosts of the scene before)
+inline bool camera_cut(const float reproject[16]) {
+    const float depths[3] = {0.99f, 0.999f, 1.0f};
+    for (const float z : depths) {
+        const float x = reproject[2] * z + reproject[3], y = reproject[6] * z + reproject[7];
+        const float w = reproject[14] * z + reproject[15];
+        if (!(w > 1e-6f)) return true;
+        if (!(std::fabs(x) <= w && std::fabs(y) <= w)) return true;
+    }
+    return false;
+}
+
 /// A view-projection's jitter taken off (row major): a jitter moves clip x and y by jitter * w, so jitter times the w row
 /// comes off the first two rows
 inline void unjitter(float m[16], const float jitter[2]) {
@@ -97,6 +114,64 @@ inline void unjitter(float m[16], const float jitter[2]) {
 inline void jitter_to_pixels(const float clip[2], unsigned width, unsigned height, float out[2]) {
     out[0] = clip[0] * 0.5f * (float)width;
     out[1] = -clip[1] * 0.5f * (float)height;
+}
+
+/// a * b, row major 4 x 4 (clip = M * position: a after b)
+inline void mul4(const float* a, const float* b, float out[16]) {
+    float t[16];
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 4; c++) {
+            double v = 0;
+            for (int k = 0; k < 4; k++) v += (double)a[r * 4 + k] * b[k * 4 + c];
+            t[r * 4 + c] = (float)v;
+        }
+    for (int i = 0; i < 16; i++) out[i] = t[i];
+}
+/// The inverse of m (row major); false when it is singular
+inline bool invert4(const float* m, float out[16]) {
+    static const float id[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    return reprojection(m, id, out);   // (identity * inverse(m))
+}
+
+/// (relink, 0.7.9.3) The camera as NVIDIA DLSS Frame Generation takes it (vk_dlss.cpp dlssg_generate): its matrices from the
+/// game's view-projections and projection, all without the jitter, and in Vulkan's clip space, where the depth the frame
+/// generator reads lives. The game's clip space is OpenGL's (y up, depth -1 to 1); the hardware's is y down, depth 0 to 1:
+/// vulkan = C * game with C = (x, -y, (z + w) / 2, w). Out in NGX's layout: float[4][4] "row-major, assuming
+/// post-multiplication" (a row vector times the matrix: the transpose of ours) unless `ours` (RX_VK_DLSSG_MATRIX=plain, in case
+/// a tester shows the other reading is NGX's). The camera's place and axes in the world: view = inverse(projection) * view-projection
+struct FgCamera {
+    float view_to_clip[16], clip_to_view[16], clip_to_prev[16], prev_to_clip[16];
+    float pos[3], up[3], right[3], fwd[3];
+};
+inline bool fg_camera(const float* vp, const float* vp_before, const float* proj, bool ours, FgCamera* f) {
+    static const float C[16] = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0.5f, 0.5f, 0, 0, 0, 1};
+    static const float Ci[16] = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 2, -1, 0, 0, 0, 1};
+    float r[16], ri[16], t[16], pi[16], view[16], vi[16];
+    if (!reprojection(vp, vp_before, r) || !invert4(r, ri) || !invert4(proj, pi)) return false;
+    mul4(pi, vp, view);   // (world to the camera's view)
+    if (!invert4(view, vi)) return false;
+    const auto out = [&](const float* m, float* dst) {
+        for (int i = 0; i < 4; i++)
+            for (int j = 0; j < 4; j++) dst[i * 4 + j] = ours ? m[i * 4 + j] : m[j * 4 + i];
+    };
+    mul4(C, r, t), mul4(t, Ci, t), out(t, f->clip_to_prev);
+    mul4(C, ri, t), mul4(t, Ci, t), out(t, f->prev_to_clip);
+    mul4(C, proj, t), out(t, f->view_to_clip);
+    mul4(pi, Ci, t), out(t, f->clip_to_view);
+    // (the camera's place: where view space's origin is in the world; its axes: the view's rows, OpenGL's camera looking
+    // down its -z)
+    const float w = vi[15];
+    if (!(std::fabs(w) > 1e-12f)) return false;
+    for (int i = 0; i < 3; i++) f->pos[i] = vi[i * 4 + 3] / w;
+    const auto unit = [](const float* row, float s, float* dst) {
+        const float n = std::sqrt(row[0] * row[0] + row[1] * row[1] + row[2] * row[2]);
+        for (int i = 0; i < 3; i++) dst[i] = n > 0 ? s * row[i] / n : 0.0f;
+    };
+    unit(view + 0, 1.0f, f->right), unit(view + 4, 1.0f, f->up), unit(view + 8, -1.0f, f->fwd);
+    for (const float* a : {f->clip_to_prev, f->prev_to_clip, f->view_to_clip, f->clip_to_view})
+        for (int i = 0; i < 16; i++)
+            if (!std::isfinite(a[i])) return false;
+    return true;
 }
 
 } // namespace mkwvk::dlss_math

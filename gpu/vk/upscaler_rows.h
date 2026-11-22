@@ -6,10 +6,11 @@ namespace mkwvk::upscaler_rows {
 
 /// The Upscaler row (opts.dlss, RX_VK_DLSS): the game's own network, NVIDIA DLSS, NVIDIA DLAA, and (relink) AMD FSR from
 /// the Render resolution and AMD FSR's native anti-aliasing (the 3D at full size, as DLAA). Saved values keep their meaning:
-/// 3 and 4 came with FSR
-enum { GAME = 0, DLSS = 1, DLAA = 2, FSR = 3, FSR_AA = 4, kUpscalers = 5 };
+/// 3 and 4 came with FSR, 5 with 0.7.9.3: no upscaler at all, the 3D drawn at the output's size and shown as it is, neither
+/// scaled nor smoothed (the game's own network at 100 % still smooths the edges, and softens the picture with them)
+enum { GAME = 0, DLSS = 1, DLAA = 2, FSR = 3, FSR_AA = 4, NONE = 5, kUpscalers = 6 };
 /// The upscalers that draw the 3D at full size (the Render resolution row does not apply)
-inline bool native(int upscaler) { return upscaler == DLAA || upscaler == FSR_AA; }
+inline bool native(int upscaler) { return upscaler == DLAA || upscaler == FSR_AA || upscaler == NONE; }
 /// The upscalers that scale from the Render resolution with their own modes' steps (DLSS's and FSR's are the same shares)
 inline bool temporal_steps(int upscaler) { return upscaler == DLSS || upscaler == FSR; }
 
@@ -76,7 +77,7 @@ inline int snap(int upscaler, int v) {
 /// Whether the Upscaler value v can be chosen here: the game's own always; DLSS and DLAA when dlss_ok (a build with
 /// NVIDIA's SDK, on a GPU DLSS runs on); FSR and its native AA when fsr_ok (AMD's runtime loaded and works on this GPU)
 inline bool upscaler_ok(int v, bool dlss_ok, bool fsr_ok) {
-    return v == GAME || ((v == DLSS || v == DLAA) && dlss_ok) || ((v == FSR || v == FSR_AA) && fsr_ok);
+    return v == GAME || v == NONE || ((v == DLSS || v == DLAA) && dlss_ok) || ((v == FSR || v == FSR_AA) && fsr_ok);
 }
 /// The Upscaler row's next value from v (dir +1 / -1), wrapping over the choices there are (upscaler_ok). With none but
 /// the game's own it stays there
@@ -120,7 +121,7 @@ inline bool upscaler_shown() { return true; }
 /// Rows with nothing else to choose here (shown without arrows; Left and Right leave the saved value alone): the Upscaler
 /// where neither DLSS (dlss_ok: dlss_why() == DLSS_OK) nor FSR (fsr_ok: fsr_why() == FSR_OK) can run, the Render resolution
 /// with DLAA or FSR's native AA (the 3D at full size), the DLSS model while DLSS and DLAA are not drawing
-inline bool upscaler_fixed(bool dlss_ok, bool fsr_ok) { return !dlss_ok && !fsr_ok; }
+inline bool upscaler_fixed(bool dlss_ok, bool fsr_ok) { return (void)dlss_ok, (void)fsr_ok, false; }   // (None is everywhere)
 inline bool resolution_fixed(int upscaler) { return native(upscaler); }
 /// The DLSS model row: shown in a build with DLSS (built: dlss_built()), with nothing to choose while another upscales
 inline bool model_shown(bool built) { return built; }

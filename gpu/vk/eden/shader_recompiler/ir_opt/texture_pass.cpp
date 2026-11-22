@@ -250,8 +250,9 @@ u32 DynamicSampledTextureArrayCount(const TextureInstVector& to_replace) {
     u32 count{};
     for (const TextureInst& inst : to_replace) {
         const auto flags{inst.inst->Flags<IR::TextureInstInfo>()};
-        if (inst.cbuf.count > 1 && !IsStorageImageOpcode(IndexedInstruction(*inst.inst)) &&
-            flags.type != TextureType::Buffer) {
+        // (a lookup table's array keeps its own size, kLookupSlots: not counted, not capped)
+        if (inst.cbuf.count > 1 && inst.cbuf.handle_program == ~0U &&
+            !IsStorageImageOpcode(IndexedInstruction(*inst.inst)) && flags.type != TextureType::Buffer) {
             ++count;
         }
     }
@@ -385,6 +386,18 @@ static inline std::optional<ConstBufferAddr> TrackCached(const IR::Value& v, Env
 
 std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environment& env, const HostTranslateInfo& host_info, const IR::Block* block);
 
+bool IsFloatResult(const IR::Inst& inst) {
+    switch (inst.Type()) {
+    case IR::Type::F16: case IR::Type::F32: case IR::Type::F64:
+    case IR::Type::F16x2: case IR::Type::F16x3: case IR::Type::F16x4:
+    case IR::Type::F32x2: case IR::Type::F32x3: case IR::Type::F32x4:
+    case IR::Type::F64x2: case IR::Type::F64x3: case IR::Type::F64x4:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool IsMemoryLoad(IR::Opcode opcode) {
     switch (opcode) {
     case IR::Opcode::LoadGlobalU8: case IR::Opcode::LoadGlobalS8: case IR::Opcode::LoadGlobalU16:
@@ -422,6 +435,13 @@ std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, c
         if (IsMemoryLoad(inst->GetOpcode())) {
             continue;
         }
+        // (relink) Nor into a sample or float math: a handle is an integer word, and a register the
+        // light loops reuse for a handle and for a sample's result made the search follow the
+        // sample's coordinates to a float constant. With lookup tables only, so that turning them
+        // off translates as before.
+        if (host_info.support_lookup_tables && (IsTextureInstruction(*inst) || IsFloatResult(*inst))) {
+            continue;
+        }
         for (size_t arg = inst->NumArgs(); arg--;) {
             const IR::Value arg_value{ResolveTexturePhi(inst->Arg(arg), block)};
             if (arg_value.IsImmediate()) {
@@ -434,6 +454,108 @@ std::optional<ConstBufferAddr> Track(const IR::Value& value, Environment& env, c
         }
     }
     return std::nullopt;
+}
+
+// (relink) Lookup tables. OoT's clustered lights read, per pixel, a light number from the pixel's
+// light list, then that light's shadow map handle from the light table (96 bytes a light, the
+// handle the first word of a 16-byte read). No single handle serves a whole draw: the sample
+// becomes an array of the table's first kLookupSlots entries, the program filling slot k with
+// entry k's handle (HandleOp::Slot standing for the light number) and the shader indexing the
+// array with the light number it read. Before this the sample got the light table's address as
+// its handle, which binds no texture: dark squares around Link on water and ice, broken shadows
+// over shards and the Royal Tomb's acid.
+constexpr u32 kLookupSlots = 64;
+
+struct LookupBuild {
+    bool allowed{};          // this build may take a table index (the retry in MakeInst)
+    bool wide_reads{};       // words of 12- and 16-byte reads are followed (lookup tables on)
+    const IR::Inst* index{}; // the per-invocation word taken as the table index
+    int load_depth{};        // how many reads' addresses are being built around this point
+    int scale_depth{};       // constant scalings since the innermost such address began
+};
+thread_local LookupBuild g_lookup;
+
+// Whether every path from the program's start to use passes def (def is computed before use
+// wherever use runs). Walks back from use's block; reaching the start without crossing def's
+// block means it does not.
+bool RunsBefore(const IR::Inst* def, const IR::Block* def_block, const IR::Inst* use,
+                const IR::Block* use_block, const IR::Block* entry) {
+    if (def_block == nullptr || use_block == nullptr) {
+        return false;
+    }
+    if (def_block == use_block) {
+        for (const IR::Inst& inst : def_block->Instructions()) {
+            if (&inst == def) return true;
+            if (&inst == use) return false;
+        }
+        return false;
+    }
+    std::unordered_set<const IR::Block*> seen{use_block};
+    std::vector<const IR::Block*> work{use_block};
+    while (!work.empty()) {
+        const IR::Block* const at{work.back()};
+        work.pop_back();
+        if (at == entry) {
+            return false;
+        }
+        for (const IR::Block* const pred : at->ImmPredecessors()) {
+            if (pred != def_block && seen.insert(pred).second) {
+                work.push_back(pred);
+            }
+        }
+    }
+    return true;
+}
+
+// The operand words that follow each operation of a handle program.
+u32 HandleOperandCount(HandleOp op) {
+    switch (op) {
+    case HandleOp::Cbuf:
+        return 2;
+    case HandleOp::Immediate:
+    case HandleOp::CbufDynamic:
+    case HandleOp::Storage:
+    case HandleOp::Tee:
+    case HandleOp::Load:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+// A program's last operations keeping its result in a slot keep it for nothing; without them the
+// dozens of samples of one table in a light loop share one program and one descriptor array.
+void DropFinalTees(std::vector<u32>& code) {
+    size_t keep{};
+    for (size_t pc = 0; pc < code.size();) {
+        const auto op{static_cast<HandleOp>(code[pc])};
+        pc += 1 + HandleOperandCount(op);
+        if (op != HandleOp::Tee) {
+            keep = (std::min)(pc, code.size());
+        }
+    }
+    code.resize(keep);
+}
+
+// The program the pass on this thread runs on, and the block of each of its instructions (made
+// the first time a table index is checked).
+thread_local const IR::Program* g_lookup_program{};
+thread_local std::unordered_map<const IR::Inst*, const IR::Block*> g_inst_blocks;
+
+bool IndexRunsBefore(const IR::Inst* index, const IR::Inst& sample, const IR::Block* sample_block) {
+    if (g_lookup_program == nullptr || g_lookup_program->post_order_blocks.empty()) {
+        return false;
+    }
+    if (g_inst_blocks.empty()) {
+        for (const IR::Block* const b : g_lookup_program->post_order_blocks) {
+            for (const IR::Inst& i : b->Instructions()) {
+                g_inst_blocks.emplace(&i, b);
+            }
+        }
+    }
+    const auto found{g_inst_blocks.find(index)};
+    return found != g_inst_blocks.end() &&
+           RunsBefore(index, found->second, &sample, sample_block, g_lookup_program->post_order_blocks.back());
 }
 
 // Builds a handle program (shader_info.h) for a value computed from constant buffer and storage
@@ -490,11 +612,14 @@ bool BuildHandleProgram(const IR::Value& value, std::vector<u32>& code, int& bud
         g_handle_slots.emplace(inst, ~0U);
         const size_t start = code.size();
         const u32 first_slot = g_handle_slot_count;
+        const IR::Inst* const index_before{g_lookup.index};
         result = BuildHandleNode(value, code, budget, block);
         g_handle_slots.erase(inst);
         if (!result) {
             // The Tee of every value the dropped code kept goes with it: a later use of one of
-            // them (another Phi input) must build it again, not load a slot nothing wrote.
+            // them (another Phi input) must build it again, not load a slot nothing wrote. A
+            // table index the dropped code took goes too.
+            g_lookup.index = index_before;
             code.resize(start);
             std::erase_if(g_handle_slots, [first_slot](const auto& entry) {
                 return entry.second != ~0U && entry.second >= first_slot;
@@ -544,6 +669,32 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
                 emit(Op::Add);
             }
         };
+        // The address a read is made at. Inside it only the first level may take the table index:
+        // the index's own address is per invocation and is never built.
+        const auto read_address = [&](const IR::Value& offset) {
+            const LookupBuild outer{g_lookup};
+            g_lookup.allowed = outer.allowed && outer.load_depth == 0;
+            g_lookup.scale_depth = 0;
+            ++g_lookup.load_depth;
+            const bool built{BuildHandleProgram(offset, code, budget, block)};
+            const IR::Inst* const index{g_lookup.index};
+            g_lookup = outer;
+            g_lookup.index = index;
+            return built;
+        };
+        // A word read at an address no draw can compute: the table index, when it is scaled to a
+        // byte offset in the address of the read that gives the handle (one index a program).
+        const auto take_as_index = [&] {
+            if (!g_lookup.allowed || g_lookup.load_depth == 0 || g_lookup.scale_depth == 0) {
+                return false;
+            }
+            if (g_lookup.index != nullptr && g_lookup.index != inst) {
+                return false;
+            }
+            g_lookup.index = inst;
+            emit(Op::Slot);
+            return true;
+        };
         switch (source->GetOpcode()) {
         case IR::Opcode::GetCbufU32:
         case IR::Opcode::GetCbufU32x2: {
@@ -556,7 +707,7 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
                 code.push_back(offset.U32() + extra);
                 return true;
             }
-            if (!BuildHandleProgram(offset, code, budget, block)) return false;
+            if (!read_address(offset)) return take_as_index();
             add_extra();
             emit(Op::CbufDynamic);
             code.push_back(index.U32());
@@ -567,7 +718,7 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
         case IR::Opcode::LoadStorage128: {
             const IR::Value binding{source->Arg(0)};
             if (!binding.IsImmediate()) return false;
-            if (!BuildHandleProgram(source->Arg(1), code, budget, block)) return false;
+            if (!read_address(source->Arg(1))) return take_as_index();
             add_extra();
             emit(Op::Storage);
             code.push_back(binding.U32());
@@ -587,9 +738,17 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
     case IR::Opcode::GetCbufU32:
     case IR::Opcode::LoadStorage32:
         return load_word(inst, 0);
-    case IR::Opcode::CompositeExtractU32x2: {
+    case IR::Opcode::CompositeExtractU32x2:
+    case IR::Opcode::CompositeExtractU32x3:
+    case IR::Opcode::CompositeExtractU32x4: {
+        // (relink: a word of a 12- or 16-byte read too, with lookup tables on: the light table's
+        // shadow map handle is the first word of a 16-byte read)
         const IR::Value element{inst->Arg(1)};
-        if (!element.IsImmediate() || inst->Arg(0).IsImmediate()) return false;
+        const bool wide{inst->GetOpcode() != IR::Opcode::CompositeExtractU32x2};
+        if (!element.IsImmediate() || inst->Arg(0).IsImmediate() || (wide && !g_lookup.wide_reads)) {
+            g_handle_failure = inst->GetOpcode();
+            return false;
+        }
         return load_word(inst->Arg(0).InstRecursive(), element.U32() * 4);
     }
     case IR::Opcode::Phi: {
@@ -634,11 +793,21 @@ bool BuildHandleNode(const IR::Value& value, std::vector<u32>& code, int& budget
     }
     case IR::Opcode::IAdd32: return binary(Op::Add);
     case IR::Opcode::ISub32: return binary(Op::Sub);
-    case IR::Opcode::IMul32: return binary(Op::Mul);
+    case IR::Opcode::IMul32:
+    case IR::Opcode::ShiftLeftLogical32: {
+        // A product with (or a shift by) a constant scales a table index to a byte offset.
+        const bool shift{inst->GetOpcode() == IR::Opcode::ShiftLeftLogical32};
+        const int scales{inst->Arg(1).IsImmediate() || (!shift && inst->Arg(0).IsImmediate()) ? 1 : 0};
+        g_lookup.scale_depth += scales;
+        const bool built{build(0) && build(1)};
+        g_lookup.scale_depth -= scales;
+        if (!built) return false;
+        emit(shift ? Op::Shl : Op::Mul);
+        return true;
+    }
     case IR::Opcode::BitwiseAnd32: return binary(Op::And);
     case IR::Opcode::BitwiseOr32: return binary(Op::Or);
     case IR::Opcode::BitwiseXor32: return binary(Op::Xor);
-    case IR::Opcode::ShiftLeftLogical32: return binary(Op::Shl);
     case IR::Opcode::ShiftRightLogical32: return binary(Op::Shr);
     case IR::Opcode::ShiftRightArithmetic32: return binary(Op::Sar);
     case IR::Opcode::INeg32: return unary(Op::Neg);
@@ -942,7 +1111,29 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
             std::vector<u32> code;
             int budget = 4096;
             g_handle_failure = IR::Opcode::Void;
-            if (!g_handle_programs || !BuildHandleProgram(inst.Arg(0), code, budget, block)) {
+            bool built{g_handle_programs && BuildHandleProgram(inst.Arg(0), code, budget, block)};
+            const IR::Inst* table_index{};
+            const IR::Opcode indexed{IndexedInstruction(inst)};
+            const bool sampled{!IsStorageImageOpcode(indexed) &&
+                               inst.Flags<IR::TextureInstInfo>().type != TextureType::Buffer};
+            if (!built && g_handle_programs && sampled && host_info.support_lookup_tables) {
+                // (relink) Again, a word read per invocation now allowed as a table index (see
+                // kLookupSlots). The shader indexes the array with that word, so it must be
+                // computed before the sample on every path; where it isn't, the search below.
+                code.clear();
+                budget = 4096;
+                g_lookup.allowed = true;
+                g_lookup.index = nullptr;
+                built = BuildHandleProgram(inst.Arg(0), code, budget, block);
+                table_index = built ? g_lookup.index : nullptr;
+                g_lookup.allowed = false;
+                g_lookup.index = nullptr;
+                if (built && table_index != nullptr && !IndexRunsBefore(table_index, inst, block)) {
+                    built = false;
+                    table_index = nullptr;
+                }
+            }
+            if (!built) {
                 // Not computable for a whole draw (a handle that changes in a loop): keep the
                 // earlier search through loads, which at least gives the shader a texture.
                 const std::optional<ConstBufferAddr> legacy{IR::BreadthFirstSearch(inst.Arg(0),
@@ -954,6 +1145,9 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
                                                   g_handle_failure, budget);
                 }
                 return TextureInst{.cbuf = *legacy, .inst = &inst, .block = block};
+            }
+            if (host_info.support_lookup_tables) {
+                DropFinalTees(code);
             }
             auto& programs{*g_handle_programs};
             auto it{std::ranges::find(programs, code)};
@@ -968,8 +1162,9 @@ TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const H
                 .secondary_index = 0,
                 .secondary_offset = 0,
                 .secondary_shift_left = 0,
-                .dynamic_offset = {},
-                .count = 1,
+                // (a lookup table: the shader's own index word picks the slot)
+                .dynamic_offset = table_index ? IR::U32{IR::Value{const_cast<IR::Inst*>(table_index)}} : IR::U32{},
+                .count = table_index ? kLookupSlots : 1U,
                 .has_secondary = false,
                 .handle_program = static_cast<u32>(it - programs.begin()),
             };
@@ -1196,6 +1391,14 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
     }
     TextureInstVector to_replace;
     g_handle_programs = &program.info.handle_programs;
+    g_lookup = LookupBuild{.wide_reads = host_info.support_lookup_tables};
+    g_lookup_program = &program;
+    g_inst_blocks.clear();
+    SCOPE_EXIT {
+        g_lookup = LookupBuild{};
+        g_lookup_program = nullptr;
+        g_inst_blocks.clear();
+    };
     for (IR::Block* const block : program.post_order_blocks) {
         env.track_cache.clear();
         for (IR::Inst& inst : block->Instructions()) {
@@ -1296,7 +1499,10 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
             break;
         }
         u32 index;
-        u32 size_shift = cbuf.count > 1 ? DynamicDescriptorSizeShift(cbuf.dynamic_offset) : DESCRIPTOR_SIZE_SHIFT;
+        // (a lookup table's index word is the slot itself: no descriptor stride to divide by)
+        const bool lookup_table{cbuf.count > 1 && cbuf.handle_program != ~0U};
+        u32 size_shift = lookup_table ? 0U
+                         : cbuf.count > 1 ? DynamicDescriptorSizeShift(cbuf.dynamic_offset) : DESCRIPTOR_SIZE_SHIFT;
         u32 count = cbuf.count;
         switch (inst->GetOpcode()) {
         case IR::Opcode::ImageRead:
@@ -1366,7 +1572,9 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                     .handle_program = cbuf.handle_program,
                 });
             } else {
-                count = std::min(count, sampled_dynamic_cap);
+                if (!lookup_table) {
+                    count = std::min(count, sampled_dynamic_cap);
+                }
                 const bool is_integer{!flags.is_depth && is_texture_pixel_format_integer(cbuf)};
                 index = descriptors.Add(TextureDescriptor{
                     .type = flags.type,
@@ -1394,8 +1602,9 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
         if (count > 1) {
             const auto insert_point{IR::Block::InstructionList::s_iterator_to(*inst)};
             IR::IREmitter ir{*texture_inst.block, insert_point};
-            const IR::U32 shift{ir.Imm32(size_shift)};
-            inst->SetArg(0, ir.UMin(ir.ShiftRightLogical(cbuf.dynamic_offset, shift), ir.Imm32(count - 1)));
+            const IR::U32 slot{size_shift != 0 ? IR::U32{ir.ShiftRightLogical(cbuf.dynamic_offset, ir.Imm32(size_shift))}
+                                               : cbuf.dynamic_offset};
+            inst->SetArg(0, ir.UMin(slot, ir.Imm32(count - 1)));
         } else {
             inst->SetArg(0, IR::Value{});
         }

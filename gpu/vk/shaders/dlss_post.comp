@@ -1,0 +1,51 @@
+#version 450
+// (relink, 0.7.9.3) The game's composite (its program ab3681946f93594a, relink_release upscaler_best_TASKS.md "G4 MAP"), ours:
+// the scene through a colour matrix (clamped to 0..10000), plus the bloom raised to a power, times the exposure, through the
+// ACES curve (Narkowicz's fit), saturated: linear colour, as the game's SMAA and network take it. vk_dlss.cpp runs it where
+// the upscalers take the HDR scene, at the output's size after them; and at the render size against the game's own, a test
+// (mode 1: the difference, times 16).
+//   scene: the HDR scene (linear); bloom: the game's bloom (240x135 at 1440x810, sampled at the same place); game: the game's
+//   composite (mode 1); out: the result
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D scene;
+layout(binding = 1) uniform sampler2D bloom;
+layout(binding = 2) uniform sampler2D game;
+layout(binding = 3, rgba16f) uniform writeonly image2D dst;
+layout(push_constant) uniform P {
+    vec4 row[3];       // (the colour matrix, its offset in w)
+    float power;       // (the bloom's)
+    float exposure;
+    ivec2 size;
+    int mode;          // (0: the composite; 1: |ours - the game's| x 16; 2: that with the scene and bloom swapped; 3: a copy;
+                       // 4: the HDR input; 5: the composite after the upscale)
+} pc;
+vec3 aces(vec3 x) { return clamp(x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+void main() {
+    const ivec2 g = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(g, pc.size))) return;
+    if (pc.mode == 3) {   // (the scene copied as it is: the HDR scene kept before the game's SMAA writes over its image)
+        imageStore(dst, g, vec4(texelFetch(scene, g, 0).rgb, 1.0));
+        return;
+    }
+    const vec2 uv = (vec2(g) + 0.5) / vec2(pc.size);
+    if (pc.mode == 4) {   // (the upscalers' HDR input: the scene through the colour matrix, clamped, times the exposure)
+        const vec3 s = texelFetch(scene, g, 0).rgb;
+        const vec3 c = vec3(dot(pc.row[0].xyz, s) + pc.row[0].w, dot(pc.row[1].xyz, s) + pc.row[1].w, dot(pc.row[2].xyz, s) + pc.row[2].w);
+        imageStore(dst, g, vec4(clamp(c, 0.0, 10000.0) * pc.exposure, 1.0));
+        return;
+    }
+    if (pc.mode == 5) {   // (after the upscale, at its size: plus the bloom, through ACES, encoded as the network's output is)
+        const vec3 up = max(texelFetch(scene, g, 0).rgb, vec3(0.0));
+        const vec3 x = up + exp2(log2(abs(textureLod(bloom, uv, 0.0).rgb)) * pc.power) * pc.exposure;
+        imageStore(dst, g, vec4(sqrt(aces(x)), 1.0));
+        return;
+    }
+    vec3 s = textureLod(scene, uv, 0.0).rgb, b = textureLod(bloom, uv, 0.0).rgb;
+    if (pc.mode == 2) { const vec3 t = s; s = b; b = t; }
+    vec3 c = vec3(dot(pc.row[0].xyz, s) + pc.row[0].w, dot(pc.row[1].xyz, s) + pc.row[1].w, dot(pc.row[2].xyz, s) + pc.row[2].w);
+    c = clamp(c, 0.0, 10000.0);
+    const vec3 x = (c + exp2(log2(abs(b)) * pc.power)) * pc.exposure;
+    vec3 o = aces(x);
+    if (pc.mode == 1 || pc.mode == 2) o = clamp(abs(o - textureLod(game, uv, 0.0).rgb) * 16.0, 0.0, 1.0);
+    imageStore(dst, g, vec4(o, 1.0));
+}

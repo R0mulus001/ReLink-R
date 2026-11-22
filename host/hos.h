@@ -56,6 +56,15 @@ int hos_game_is_mkw(void);
    mapped through AllocateMemoryPages; legacy_heap preserves each old answer. */
 uint64_t hos_reported_used_memory(uint64_t base, int legacy_heap);
 void hos_commit(uint64_t addr, uint64_t size);         /* (mkw_glue.c) guest pages made usable by host APIs */
+/* (mkw_glue.c) the parts of [addr, addr + size) that are only reserved, committed; the committed ones left as they are.
+   Before a system call is given guest memory the game may never have touched (a file read into the lazy heap). Returns
+   the bytes committed */
+uint64_t hos_commit_reserved(uint64_t addr, uint64_t size);
+extern int hos_heap_lazy;   /* (hos_mem.c) the heap is committed as it is touched, not when its size is set */
+/* (mkw_glue.c) with a lazy heap: the heap's part of [addr, addr + size) committed before a system call is handed it (the
+   kernel's own access to reserved memory fails, it does not reach the first-touch handler). Nothing when the heap is
+   committed whole */
+void hos_heap_ensure(uint64_t addr, uint64_t size);
 #if defined(A64_WRITE_TRACK) && !defined(__EMSCRIPTEN__)
 void hos_mark_written(const void *p, size_t n);   /* (hos_mem.c: guest memory written by host code, native soft watch) */
 #define HOS_WRITTEN(p, n) hos_mark_written((p), (n))

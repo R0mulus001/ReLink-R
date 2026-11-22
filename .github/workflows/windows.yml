@@ -63,7 +63,7 @@ jobs:
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             tag=$GITHUB_REF_NAME
           else
-            tag=$(git describe --tags --match 'v[0-9]*' 2>/dev/null || echo "v0.0.0-$(git rev-parse --short HEAD)")
+            tag=$(git describe --tags --match 'v0.0.*' 2>/dev/null || echo "v0.0.0-$(git rev-parse --short HEAD)")
           fi
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"

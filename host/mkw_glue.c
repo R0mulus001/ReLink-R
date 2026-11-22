@@ -33,23 +33,72 @@ static void commit_marks(uint64_t lo, uint64_t hi) {
     for (uint64_t a = (lo + step - 1) / step * step; a + 4096 <= hi; a += step)
         VirtualProtect(GP(a), 4096, PAGE_EXECUTE_READWRITE, &old);
 }
+static void commit_failed(uint64_t lo, uint64_t bytes);
 void hos_commit(uint64_t addr, uint64_t size) {
     if (!size) return;
     const uint64_t lo = addr & ~0xFFFFULL, hi = (addr + size + 0xFFFF) & ~0xFFFFULL;
     if (!VirtualAlloc(GP(lo), (SIZE_T)(hi - lo), MEM_COMMIT, PAGE_READWRITE)) {
-        const DWORD err = GetLastError();
-        hos_log("mem: commit of %#llx bytes at %#llx failed (error %lu)", (unsigned long long)(hi - lo),
-                (unsigned long long)lo, err);
-        if (err == ERROR_COMMITMENT_LIMIT) {   /* (1455: RAM and page file full; the game crashes soon after. Said once, on its own thread) */
-            static volatile LONG said;
-            if (InterlockedExchange(&said, 1) == 0) {
-                hos_log("mem: Windows is out of memory (RAM and page file): close other programs, or let Windows manage the page file size");
-                extern DWORD WINAPI hos_out_of_memory_box(LPVOID);
-                CloseHandle(CreateThread(NULL, 0, hos_out_of_memory_box, NULL, 0, NULL));
-            }
-        }
+        commit_failed(lo, hi - lo);
     } else {
         commit_marks(lo, hi);   /* (relink) an RWX page every 64 MB of a commit: VirtualQuery's walks stay short (pool imports 90-120 ms -> 2-7 ms) */
+    }
+}
+
+static void commit_failed(uint64_t lo, uint64_t bytes) {
+    const DWORD err = GetLastError();
+    hos_log("mem: commit of %#llx bytes at %#llx failed (error %lu)", (unsigned long long)bytes, (unsigned long long)lo, err);
+    if (err == ERROR_COMMITMENT_LIMIT) {   /* (1455: RAM and page file full; the game crashes soon after. Said once, on its own thread) */
+        static volatile LONG said;
+        if (InterlockedExchange(&said, 1) == 0) {
+            hos_log("mem: Windows is out of memory (RAM and page file): close other programs, or let Windows manage the page file size");
+            extern DWORD WINAPI hos_out_of_memory_box(LPVOID);
+            CloseHandle(CreateThread(NULL, 0, hos_out_of_memory_box, NULL, 0, NULL));
+        }
+    }
+}
+uint64_t hos_commit_reserved(uint64_t addr, uint64_t size) {
+    if (!size || addr >= HOS_GUEST_SPACE) return 0;
+    const uint64_t lo = addr & ~0xFFFULL;
+    uint64_t hi = (addr + size + 0xFFF) & ~0xFFFULL, done = 0;
+    if (hi > HOS_GUEST_SPACE) hi = HOS_GUEST_SPACE;
+    for (uint64_t a = lo; a < hi;) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (VirtualQuery(GP(a), &mi, sizeof mi) != sizeof mi) break;
+        uint64_t end = (uint64_t)((const uint8_t *)mi.BaseAddress - (const uint8_t *)GP(0)) + mi.RegionSize;
+        if (end > hi) end = hi;
+        if (end <= a) break;
+        if (mi.State == MEM_RESERVE) {
+            if (VirtualAlloc(GP(a), (SIZE_T)(end - a), MEM_COMMIT, PAGE_READWRITE)) done += end - a;
+            else commit_failed(a, end - a);
+        }
+        a = end;
+    }
+    return done;
+}
+
+/* (relink, 0.7.9.3) The lazy heap's 2 MB blocks known to be committed whole: one bit each, set once, so that a file read
+   into the heap asks Windows nothing about memory it has been through already (a VirtualQuery over committed pages
+   walks them: 0.15 ms for 64 MB) */
+static uint8_t heap_block_done[8192];   /* (16 GB of heap) */
+static int heap_block_known(uint64_t block) {
+    return block < sizeof heap_block_done * 8 && (__atomic_load_n(&heap_block_done[block >> 3], __ATOMIC_RELAXED) >> (block & 7) & 1);
+}
+static void heap_block_set(uint64_t block) {
+    if (block < sizeof heap_block_done * 8) __atomic_fetch_or(&heap_block_done[block >> 3], (uint8_t)(1u << (block & 7)), __ATOMIC_RELAXED);
+}
+void hos_heap_ensure(uint64_t addr, uint64_t size) {
+    if (!hos_heap_lazy || !size) return;
+    const uint64_t heap_end = HOS_HEAP_BASE + hos_heap_size;
+    uint64_t lo = addr, hi = addr + size;
+    if (lo < HOS_HEAP_BASE) lo = HOS_HEAP_BASE;
+    if (hi > heap_end) hi = heap_end;
+    for (uint64_t b = (lo - HOS_HEAP_BASE) >> 21; lo < hi && b <= (hi - 1 - HOS_HEAP_BASE) >> 21; b++) {
+        if (heap_block_known(b)) continue;
+        const uint64_t at = HOS_HEAP_BASE + (b << 21);
+        uint64_t end = at + 0x200000;
+        if (end > heap_end) end = (heap_end + 0xFFF) & ~0xFFFULL;
+        if (hos_commit_reserved(at, end - at)) commit_marks(at, end);
+        heap_block_set(b);
     }
 }
 
@@ -80,6 +129,40 @@ static LONG CALLBACK commit_on_touch(EXCEPTION_POINTERS *info) {
     if (mbi.State == MEM_COMMIT && (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
         return EXCEPTION_CONTINUE_EXECUTION;
     if (mbi.State != MEM_RESERVE) return EXCEPTION_CONTINUE_SEARCH;
+    /* (relink, 0.7.9.3, issue 153) The game's heap when it is committed as it is touched (hos_mem.c heap_lazy): the 2 MB
+       around the touch, cut to the heap, and only what is still reserved there, so that pages committed already keep
+       what they hold and how they are protected. With its commit marks, as any commit. Said at each power of two */
+    if (hos_heap_lazy && guest >= HOS_HEAP_BASE && guest < HOS_HEAP_BASE + hos_heap_size) {
+        static uint64_t heap_touches, heap_bytes, heap_ns, heap_longest_ns;
+        static uint64_t step;   /* (HOS_HEAP_LAZY_KB: what one first touch commits, 64 to 2048 KB, a power of two; 2048) */
+        if (!step) {
+            const char *e = getenv("HOS_HEAP_LAZY_KB");
+            uint64_t kb = e ? (uint64_t)atoll(e) : 2048;
+            if (kb < 64) kb = 64;
+            if (kb > 2048) kb = 2048;
+            while (kb & (kb - 1)) kb &= kb - 1;
+            step = kb << 10;
+        }
+        const int64_t t0 = hos_now_ns();
+        uint64_t lo = guest & ~(step - 1), hi = lo + step;
+        if (lo < HOS_HEAP_BASE) lo = HOS_HEAP_BASE;
+        if (hi > HOS_HEAP_BASE + hos_heap_size) hi = (HOS_HEAP_BASE + hos_heap_size + 0xFFF) & ~0xFFFULL;
+        const uint64_t got = hos_commit_reserved(lo, hi - lo);
+        if (got) commit_marks(lo, hi);
+        if (got && step == 0x200000) heap_block_set((lo - HOS_HEAP_BASE) >> 21);
+        const uint64_t all = __atomic_add_fetch(&heap_bytes, got, __ATOMIC_RELAXED);
+        const uint64_t n = __atomic_add_fetch(&heap_touches, 1, __ATOMIC_RELAXED);
+        const uint64_t ns = (uint64_t)(hos_now_ns() - t0), spent = __atomic_add_fetch(&heap_ns, ns, __ATOMIC_RELAXED);
+        if (ns > __atomic_load_n(&heap_longest_ns, __ATOMIC_RELAXED)) __atomic_store_n(&heap_longest_ns, ns, __ATOMIC_RELAXED);
+        if (n >= 256 && !(n & (n - 1)))
+            hos_log("mem: the heap is committed as the game touches it: %llu MB of %llu so far, in %llu first touches of %llu KB "
+                    "(%.1f ms in the handler in all, the longest %.3f ms)", (unsigned long long)(all >> 20),
+                    (unsigned long long)(hos_heap_size >> 20), (unsigned long long)n, (unsigned long long)(step >> 10), spent / 1e6,
+                    __atomic_load_n(&heap_longest_ns, __ATOMIC_RELAXED) / 1e6);
+        if (got) return EXCEPTION_CONTINUE_EXECUTION;
+        /* (nothing committed: another thread's touch did it first, or Windows has no commit left) */
+        return VirtualQuery(p, &mbi, sizeof mbi) && mbi.State == MEM_COMMIT ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+    }
     static volatile LONG touched;
     const LONG nth = InterlockedIncrement(&touched);
     if (nth <= 16) hos_log("mem: %#llx committed on first touch (nothing handed it out)", (unsigned long long)guest);

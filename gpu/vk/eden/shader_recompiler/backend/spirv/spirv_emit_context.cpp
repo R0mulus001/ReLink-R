@@ -1369,7 +1369,9 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         // trees, the next cells' trees drawn in its place: the wall of trees in the sky. The culling's compute programs, with
         // hundreds of global loads, keep the helper (NVIDIA took 41 s on one inlined, above)
         static const bool tm_inline{!std::getenv("EDEN_NX2_GM_INLINE") || std::getenv("EDEN_NX2_GM_INLINE")[0] != '0'};
-        const bool inline_here{tm_inline && (stage == Stage::Task || stage == Stage::Mesh)};
+        // (relink) and the 128-bit helper where the stage asks (RuntimeInfo::inline_global_128_loads: the Deku Tree's web vertex program)
+        const bool inline_here{tm_inline && (stage == Stage::Task || stage == Stage::Mesh ||
+                                             (shift == 4 && runtime_info.inline_global_128_loads))};
         const Id func_id{OpFunction(type, inline_here ? spv::FunctionControlMask::Inline : gm_ctl, function_type)};
         const Id addr{OpFunctionParameter(U64)};
         define_body(ssbo_member, addr, element_pointer, shift,
@@ -2278,7 +2280,9 @@ void EmitContext::DefineMesh(const IR::Program& program) {
     mesh_attribute_words = (std::max)(
         mesh_primitive_base + Common::DivCeil(mesh_info.max_primitives, 32U) * primitive_lines * 32,
         1U);
-    mesh_map_bytes = 4 + mesh_info.Corners() * mesh_info.max_primitives;
+    // (relink) Whole blocks of 32 primitives, like the attributes: the program writes the index bytes of every lane of a block, past
+    // max_primitives too, and sized to max_primitives those writes were clamped onto the last byte (a stray vertex, flashing triangles)
+    mesh_map_bytes = 4 + mesh_info.Corners() * Common::DivCeil(mesh_info.max_primitives, 32U) * 32;
     mesh_shared_u32 = TypePointer(spv::StorageClass::Workgroup, U32[1]);
     mesh_attributes = DefineVariable(*this, TypeArray(U32[1], Const(mesh_attribute_words)),
                                      std::nullopt, spv::StorageClass::Workgroup);

@@ -20,9 +20,9 @@ public partial class MainWindow
     int origHz;
     bool display60Possible;
 
-    CheckBox Fullscreen = null!, Display60 = null!, FpsCounter = null!, Ultrawide = null!, FramePacing = null!, VSync = null!, Audio = null!, Handheld = null!, InvertY = null!,
+    CheckBox Fullscreen = null!, Display60 = null!, Ultrawide = null!, FramePacing = null!, VSync = null!, Audio = null!, Handheld = null!, InvertY = null!,
              NvidiaDlss = null!;
-    WrapPanel ResolutionGroup = null!, UpscalerGroup = null!, UpscaleGroup = null!, FrameRateGroup = null!, SpeedGroup = null!, FramegenGroup = null!, UiLanguageGroup = null!;
+    WrapPanel ResolutionGroup = null!, UpscalerGroup = null!, FsrVersionGroup = null!, UpscaleGroup = null!, FrameRateGroup = null!, SpeedGroup = null!, FramegenGroup = null!, FpsCounterGroup = null!, UiLanguageGroup = null!, ThemeGroup = null!;
     Slider Sharpness = null!;
     TextBlock SharpnessText = null!, Display60Hint = null!, FolderText = null!;
     ComboBox LanguageBox = null!;
@@ -71,9 +71,13 @@ public partial class MainWindow
                     "Native is the sharpest. The percentages lighten the graphics card's work; the game scales the picture up afterwards."),
                   "Resolution", (1, L("Native", "Native")), (0, L("Automatique", "Automatic")), (2, "75 %"), (3, "67 %"), (5, "58 %"), (4, "50 %"));
         UpscalerGroup = ChoiceRow(RowsDisplay, L("Agrandissement de la 3D", "Upscaler"),
-                  L("Ce qui agrandit la 3D jusqu'à l'écran et lisse ses bords. AMD FSR marche sur toutes les cartes graphiques ; NVIDIA DLSS demande une carte RTX et la case NVIDIA DLSS ci-dessous. Avec FSR ou DLSS, mettez la netteté vers 80 %.",
-                    "What scales the 3D up to the screen and smooths its edges. AMD FSR works on every graphics card; NVIDIA DLSS needs an RTX card and the NVIDIA DLSS switch below. With FSR or DLSS, set Sharpness to about 80 %."),
-                  "Upscaler", (0, L("Celui du jeu", "The game's own")), (3, "AMD FSR"), (4, L("AMD FSR, AA natif", "AMD FSR native AA")), (1, "NVIDIA DLSS"), (2, "NVIDIA DLAA"));
+                  L("Ce qui agrandit la 3D jusqu'à l'écran et lisse ses bords. AMD FSR marche sur toutes les cartes graphiques (FSR 4 sur les Radeon RX 6000 et plus récentes) ; NVIDIA DLSS demande une carte RTX et la case NVIDIA DLSS ci-dessous. Avec FSR ou DLSS, la netteté est à 40 % par défaut : à peu près aussi net que l'agrandissement du jeu. Aucun : la 3D en pleine taille, montrée telle qu'elle est dessinée : rien de lissé, rien qui traîne, des bords crénelés.",
+                    "What scales the 3D up to the screen and smooths its edges. AMD FSR works on every graphics card (FSR 4 on Radeon RX 6000 and newer); NVIDIA DLSS needs an RTX card and the NVIDIA DLSS switch below. With FSR or DLSS, Sharpness is 40 % by default: about as crisp as the game's own. None: the 3D at full size, shown as it is drawn: nothing smoothed, nothing that trails, jagged edges."),
+                  "Upscaler", (0, L("Celui du jeu", "The game's own")), (3, "AMD FSR"), (4, L("AMD FSR, AA natif", "AMD FSR native AA")), (1, "NVIDIA DLSS"), (2, "NVIDIA DLAA"), (5, L("Aucun", "None")));
+        FsrVersionGroup = ChoiceRow(RowsDisplay, L("Version d'AMD FSR", "AMD FSR version"),
+                  L("Auto : FSR 4, le réseau d'AMD, plus net et plus stable, là où la carte le fait tourner (Radeon RX 6000 et plus récentes, pilote récent), sinon FSR 3.1. FSR 3.1 : plus léger pour la carte graphique.",
+                    "Auto: FSR 4, AMD's network, sharper and steadier, where the card runs it (Radeon RX 6000 and newer, recent driver), else FSR 3.1. FSR 3.1: lighter on the graphics card."),
+                  "FsrVersion", (0, L("Auto (FSR 4)", "Auto (FSR 4)")), (1, "FSR 3.1"));
         UpscaleGroup = ChoiceRow(RowsDisplay, L("Filtre d'agrandissement de la fenêtre", "Window scaling filter"), L("Quand l'image est plus petite que la fenêtre.", "When the picture is smaller than the window."), "Upscale", (0, L("Simple", "Simple")), (1, "Catmull-Rom"), (2, "Lanczos"));
         SwitchRow(RowsDisplay, L("NVIDIA DLSS (cartes RTX)", "NVIDIA DLSS (RTX cards)"),
                   L("Le jeu est reconstruit avec le SDK DLSS, téléchargé chez NVIDIA. L'activer, c'est accepter la licence du SDK NVIDIA DLSS (github.com/NVIDIA/DLSS). Ensuite, choisissez DLSS ou DLAA dans le menu du jeu (touche Insert, Upscaler).",
@@ -90,7 +94,9 @@ public partial class MainWindow
         sharp.Children.Add(SharpnessText);
         RowsDisplay.Children.Add(new Border { Style = St("Row"), Child = sharp });
 
-        SwitchRow(RowsDisplay, L("Compteur d'images par seconde", "Frames-per-second counter"), null, out FpsCounter, out _);
+        FpsCounterGroup = ChoiceRow(RowsDisplay, L("Compteur d'images par seconde", "Frames-per-second counter"),
+                  L("Détaillé : temps d'image et leur courbe, 1 % bas, GPU, VRAM, CPU et RAM.", "Detailed: frame times and their graph, 1% low, GPU, VRAM, CPU and RAM."),
+                  "FpsCounter", (0, L("Masqué", "Off")), (1, L("Images par seconde", "Frame rate")), (2, L("Détaillé", "Detailed")));
         SwitchRow(RowsDisplay, L("Ultra-large", "Ultrawide"), L("La caméra prend le format de l'écran s'il est plus large que 16:9.", "The camera takes the display's shape when it is wider than 16:9."),
                   out Ultrawide, out _);
 
@@ -109,8 +115,9 @@ public partial class MainWindow
                   L("Des images intercalées : plus fluide à l'œil, pas plus réactif. L'écran garde alors sa fréquence.",
                     "Frames made in between: smoother to the eye, not more responsive. The display keeps its own rate then."),
                   "Framegen", (0, L("Aucune", "None")), (2, "×2"), (3, "×3"), (4, "×4"));
-        SwitchRow(RowsSmooth, L("Rythme régulier des images générées", "Even pacing of generated frames"),
-                  L("Avec la génération d'images seulement.", "With frame generation only."), out FramePacing, out _);
+        SwitchRow(RowsSmooth, L("Rythme régulier des images", "Even frame pacing"),
+                  L("Chaque image est montrée à intervalle régulier : moins de saccades, pour 10 ms de délai au plus (une image avec la génération d'images).",
+                    "Each frame is shown at an even interval: less stutter, for 10 ms of delay at most (one frame with frame generation)."), out FramePacing, out _);
         SwitchRow(RowsSmooth, "V-Sync",
                   L("Chaque image attend le rafraîchissement de l'écran : plus de déchirure de l'image, un peu plus de délai. Utile là où le pilote n'a pas de mode mailbox (AMD sous Windows). Le menu en jeu le change aussi, aussitôt.",
                     "Each frame waits for the display's refresh: no more tearing, a little more delay. Useful where the driver has no mailbox mode (AMD on Windows). The in-game menu changes it too, at once."),
@@ -126,6 +133,10 @@ public partial class MainWindow
         UiLanguageGroup = ChoiceRow(RowsGame, L("Langue du lanceur", "Launcher language"),
                   L("Le changement se voit à la prochaine ouverture de ReLink.", "The change shows the next time ReLink opens."),
                   "UiLanguage", (0, "English"), (1, "Français"));
+        ThemeGroup = ChoiceRow(RowsGame, L("Apparence du lanceur", "Launcher look"),
+                  L("Le menu en jeu (Insert ou F1) la suit aussi. Le lanceur change à sa prochaine ouverture.", "The in-game menu (Insert or F1) follows it too. The launcher changes the next time it opens."),
+                  "Theme", (0, L("Clair", "Light")), (1, L("Sombre", "Dark")));
+        ((FrameworkElement)((FrameworkElement)ThemeGroup.Parent).Parent).Visibility = Visibility.Collapsed;   // (ReLink-R: one look, its night)
         SwitchRow(RowsGame, L("Son", "Sound"), null, out Audio, out _);
         SwitchRow(RowsGame, L("Profil portable", "Handheld profile"),
                   L("Les réglages graphiques du mode portable : plus léger, plus flou.", "The handheld mode's graphics settings: lighter, softer."), out Handheld, out _);
@@ -319,11 +330,12 @@ public partial class MainWindow
     void UpdateHero()
     {
         var res = s.Resolution switch { 1 => L("Native", "Native"), 0 => L("Automatique", "Automatic"), 2 => "75 %", 3 => "67 %", 5 => "58 %", 4 => "50 %", _ => "" };
-        var up = s.Upscaler switch { 3 => "AMD FSR", 4 => L("AMD FSR, AA natif", "AMD FSR native AA"), 1 => "NVIDIA DLSS", 2 => "NVIDIA DLAA", _ => L("Celui du jeu", "The game's own") };
+        var fsr = s.FsrVersion == 1 ? "AMD FSR 3.1" : "AMD FSR";   // (Auto: FSR 4 where the card runs it, which the game knows)
+        var up = s.Upscaler switch { 3 => fsr, 4 => L($"{fsr}, AA natif", $"{fsr} native AA"), 1 => "NVIDIA DLSS", 2 => "NVIDIA DLAA", 5 => L("Sans agrandissement", "No upscaler"), _ => L("Celui du jeu", "The game's own") };
         LooksText.Text = $"{(s.Fullscreen != 0 ? L("Plein écran", "Full screen") : L("Fenêtre", "Window"))} · {res} · {up}";
         var rate = s.FrameRate switch { 1 => L("FPS débloqués", "Unlocked fps"), 2 => L("30 fps réguliers", "Even 30 fps"), _ => "60 fps" };
         MovesText.Text = s.FrameGeneration >= 2 ? $"{rate} · ×{s.FrameGeneration}" : rate;
-        LooksSub.Text = L($"Netteté {s.Sharpness} %", $"Sharpness {s.Sharpness} %") + (s.Ultrawide != 0 ? L(" · ultra-large", " · ultrawide") : "");
+        LooksSub.Text = L($"Netteté {s.ShownSharpness} %", $"Sharpness {s.ShownSharpness} %") + (s.Ultrawide != 0 ? L(" · ultra-large", " · ultrawide") : "");
         MovesSub.Text = (s.FrameGeneration >= 2 ? L("Génération d'images", "Frame generation") : L("Sans génération d'images", "No frame generation")) +
                         (s.VSync != 0 ? " · V-Sync" : "");
         // (the sky's line: once, after an install or an update, what the first start does; the rest of the time the name's)
@@ -368,7 +380,7 @@ public partial class MainWindow
     {
         OnSwitch(Fullscreen, v => s.Fullscreen = v ? 1 : 0);
         OnSwitch(Display60, v => s.Display60 = v);
-        OnSwitch(FpsCounter, v => s.FpsCounter = v ? 1 : 0);
+        OnPick(FpsCounterGroup, v => s.FpsCounter = v);
         OnSwitch(Ultrawide, v => s.Ultrawide = v ? 1 : 0);
         OnSwitch(FramePacing, v => s.FramePacing = v ? 1 : 0);
         OnSwitch(VSync, v => s.VSync = v ? 1 : 0);
@@ -384,16 +396,27 @@ public partial class MainWindow
                 Dispatcher.BeginInvoke(() => Rebuild(tools, s.Folder));
         });
         OnPick(ResolutionGroup, v => s.Resolution = v);
-        OnPick(UpscalerGroup, v => s.Upscaler = v);
+        OnPick(UpscalerGroup, v =>
+        {
+            s.Upscaler = v;
+            // (relink, 0.7.9.3: DLSS, DLAA and FSR have a Sharpness of their own: the slider shows the chosen upscaler's)
+            var was = loading;
+            loading = true;
+            Sharpness.Value = s.ShownSharpness;
+            SharpnessText.Text = $"{s.ShownSharpness} %";
+            loading = was;
+        });
+        OnPick(FsrVersionGroup, v => s.FsrVersion = v);
         OnPick(UpscaleGroup, v => s.Upscaling = v);
         OnPick(FrameRateGroup, v => s.FrameRate = v);
         OnPick(SpeedGroup, v => s.GameSpeed = v);
         OnPick(FramegenGroup, v => s.FrameGeneration = v);
         OnPick(UiLanguageGroup, v => s.UiLanguage = v == 1 ? "fr" : "en");
+        OnPick(ThemeGroup, v => { s.LauncherTheme = v == 1 ? Theme.Dark : Theme.Light; s.MenuLook = v; });   // (the in-game menu too)
         Sharpness.ValueChanged += (_, e) =>
         {
             SharpnessText.Text = $"{(int)e.NewValue} %";
-            if (!loading) { s.Sharpness = (int)e.NewValue; Changed(); }
+            if (!loading) { s.ShownSharpness = (int)e.NewValue; Changed(); }
         };
         LanguageBox.SelectionChanged += (_, _) =>
         {
@@ -406,7 +429,7 @@ public partial class MainWindow
         loading = true;
         Fullscreen.IsChecked = s.Fullscreen != 0;
         Display60.IsChecked = s.Display60;
-        FpsCounter.IsChecked = s.FpsCounter != 0;
+        Pick(FpsCounterGroup, s.FpsCounter);
         Ultrawide.IsChecked = s.Ultrawide != 0;
         FramePacing.IsChecked = s.FramePacing != 0;
         VSync.IsChecked = s.VSync != 0;
@@ -416,12 +439,14 @@ public partial class MainWindow
         NvidiaDlss.IsChecked = s.NvidiaDlss;
         Pick(ResolutionGroup, s.Resolution);
         Pick(UpscalerGroup, s.Upscaler);
+        Pick(FsrVersionGroup, s.FsrVersion);
         Pick(UpscaleGroup, s.Upscaling);
         Pick(FrameRateGroup, s.FrameRate);
         Pick(FramegenGroup, s.FrameGeneration);
         Pick(UiLanguageGroup, s.UiLanguage == "fr" ? 1 : 0);
-        Sharpness.Value = s.Sharpness;
-        SharpnessText.Text = $"{s.Sharpness} %";
+        Pick(ThemeGroup, s.LauncherTheme == Theme.Dark ? 1 : 0);
+        Sharpness.Value = s.ShownSharpness;
+        SharpnessText.Text = $"{s.ShownSharpness} %";
         var items = (List<LangItem>)LanguageBox.ItemsSource;
         LanguageBox.SelectedItem = items.FirstOrDefault(l => l.Code == s.Language) ?? items[0];
         FolderText.Text = s.Folder;
@@ -434,10 +459,11 @@ public partial class MainWindow
     {
         SpeedGroup.IsEnabled = s.FrameRate == 0;
         Pick(SpeedGroup, s.FrameRate != 0 ? 1 : s.GameSpeed);
-        FramePacing.IsEnabled = s.FrameGeneration != 0;
+        FramePacing.IsEnabled = true;   // (relink, 0.7.9.3: it paces the game's frames alone too, vk_framegen.cpp pace_only)
         // (NVIDIA DLSS and DLAA to choose only in a game built with them: the NVIDIA DLSS switch)
         foreach (var r in Radios(UpscalerGroup))
             if ((int)r.Tag is 1 or 2) r.Visibility = s.NvidiaDlss || s.Upscaler is 1 or 2 ? Visibility.Visible : Visibility.Collapsed;
+        FsrVersionGroup.IsEnabled = s.Upscaler is 3 or 4;   // (the FSR version: only while AMD FSR upscales)
         // (frame generation fills the display's own refresh: no switch to 60 Hz then)
         Display60.IsEnabled = display60Possible && s.FrameGeneration < 2;
         UpdateHero();

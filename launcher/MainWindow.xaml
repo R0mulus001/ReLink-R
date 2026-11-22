@@ -10,16 +10,16 @@
 
   <!-- The cartridge: the grey shell and its grooves; on the left the dark side (where to go, Play), on the right the cream label
        (one page at a time: Home, the options, the install and its steps, a problem) -->
-  <Grid x:Name="Root" ClipToBounds="True" Background="{StaticResource Shell}">
+  <Grid x:Name="Root" ClipToBounds="True" Background="{DynamicResource Shell}">
     <Grid.RowDefinitions><RowDefinition Height="32"/><RowDefinition/></Grid.RowDefinitions>
 
     <!-- the window's own buttons (ReLink-R 0.0.3: the shell plain, no grooves) -->
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,14,0">
       <Button x:Name="MinButton" Style="{StaticResource Chrome}" Click="Minimize">
-        <Path Data="M0,0 L11,0" Stroke="{StaticResource Bone}" StrokeThickness="1.6" Margin="0,7,0,0"/>
+        <Path Data="M0,0 L11,0" Stroke="{DynamicResource Bone}" StrokeThickness="1.6" Margin="0,7,0,0"/>
       </Button>
       <Button x:Name="CloseButton" Style="{StaticResource Chrome}" Click="CloseWindow">
-        <Path Data="M0,0 L10,10 M10,0 L0,10" Stroke="{StaticResource Bone}" StrokeThickness="1.6"/>
+        <Path Data="M0,0 L10,10 M10,0 L0,10" Stroke="{DynamicResource Bone}" StrokeThickness="1.6"/>
       </Button>
     </StackPanel>
 
@@ -29,7 +29,7 @@
       <!-- the side, the same on every page: where to go, then the game's state card (Sidebar.cs) and the small links. A thing is
            said in one place only: the version and the update in the card, the settings on Home's cards, Play in the sky on Home
            and in the card elsewhere -->
-      <Border x:Name="LeftColumn" Background="{StaticResource Side}" CornerRadius="12" Margin="12,0,0,12" Padding="12,16,12,10">
+      <Border x:Name="LeftColumn" Background="{DynamicResource Side}" CornerRadius="12" Margin="12,0,0,12" Padding="12,16,12,10">
         <DockPanel LastChildFill="False">
           <StackPanel DockPanel.Dock="Top">
             <StackPanel Orientation="Horizontal" Margin="6,0,0,0">
@@ -58,10 +58,10 @@
                   <Border x:Name="StatePill" DockPanel.Dock="Right" CornerRadius="9" Padding="8,2,8,3" VerticalAlignment="Center" Visibility="Collapsed">
                     <TextBlock x:Name="StatePillText" FontSize="11.5" FontWeight="Bold"/>
                   </Border>
-                  <TextBlock x:Name="CardTitle" FontSize="15" FontWeight="Bold" Foreground="{StaticResource SideText}" VerticalAlignment="Center"
+                  <TextBlock x:Name="CardTitle" FontSize="15" FontWeight="Bold" Foreground="{DynamicResource SideText}" VerticalAlignment="Center"
                              TextTrimming="CharacterEllipsis" Margin="0,0,6,0"/>
                 </DockPanel>
-                <TextBlock x:Name="MainNote" FontSize="12.5" Foreground="{StaticResource SideSoft}" TextWrapping="Wrap" Margin="0,5,0,0" Visibility="Collapsed"/>
+                <TextBlock x:Name="MainNote" FontSize="12.5" Foreground="{DynamicResource SideSoft}" TextWrapping="Wrap" Margin="0,5,0,0" Visibility="Collapsed"/>
                 <StackPanel x:Name="StepList" Margin="0,8,0,0" Visibility="Collapsed"/>
                 <Button x:Name="UpdateLink" Style="{StaticResource GoldButton}" Margin="0,10,0,0" Visibility="Collapsed" Click="UpdateClick"/>
                 <Button x:Name="MainButton" Style="{StaticResource Play}" Height="54" Margin="0,10,0,0" Click="MainClick">
@@ -80,7 +80,7 @@
       </Border>
 
       <!-- the label: one page at a time -->
-      <Border x:Name="Tablet" Grid.Column="1" Background="{StaticResource Label}" CornerRadius="12" Margin="10,0,12,12">
+      <Border x:Name="Tablet" Grid.Column="1" Background="{DynamicResource Label}" CornerRadius="12" Margin="10,0,12,12">
         <Grid Margin="20,16,20,14">
 
           <!-- Home: the sky over Hyrule at the player's hour, the staff with what the game needs, what Play will do -->
@@ -109,7 +109,7 @@
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="LooksHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="LooksText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="LooksSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="LooksSub" FontSize="12.5" Foreground="{DynamicResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
@@ -119,7 +119,7 @@
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="MovesHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="MovesText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="MovesSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="MovesSub" FontSize="12.5" Foreground="{DynamicResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
@@ -129,7 +129,7 @@
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="ModsHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="ModsCardText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="ModsSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="ModsSub" FontSize="12.5" Foreground="{DynamicResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
@@ -139,12 +139,12 @@
                   <StackPanel DockPanel.Dock="Top">
                     <TextBlock x:Name="NewsHead" FontSize="12.5" FontWeight="Bold" Foreground="{StaticResource Gold}"/>
                     <TextBlock x:Name="NewsText" FontSize="14.5" FontWeight="Bold" Margin="0,3,0,0" TextWrapping="Wrap"/>
-                    <TextBlock x:Name="NewsSub" FontSize="12.5" Foreground="{StaticResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="NewsSub" FontSize="12.5" Foreground="{DynamicResource BoneSoft}" TextWrapping="Wrap" Margin="0,4,0,0"/>
                   </StackPanel>
                 </DockPanel>
               </Border>
             </Grid>
-            <TextBlock x:Name="HeroFoot" Grid.Row="4" FontSize="12.5" Foreground="{StaticResource BoneFaint}" Margin="2,10,0,0"/>
+            <TextBlock x:Name="HeroFoot" Grid.Row="4" FontSize="12.5" Foreground="{DynamicResource BoneFaint}" Margin="2,10,0,0"/>
           </Grid>
 
           <!-- install: the player's copy, and where the game goes -->
@@ -173,7 +173,7 @@
               <Button x:Name="OutChange" Grid.Column="1" Style="{StaticResource Link}" Margin="16,0,0,0" Click="BrowseOut"/>
             </Grid>
             <TextBlock x:Name="SpaceText" Grid.Row="7" Style="{StaticResource RowHint}" Margin="2,6,0,0"/>
-            <TextBlock x:Name="ToolsNote" Grid.Row="8" Style="{StaticResource RowHint}" Foreground="{StaticResource Warn}" Margin="2,8,0,0" Visibility="Collapsed"/>
+            <TextBlock x:Name="ToolsNote" Grid.Row="8" Style="{StaticResource RowHint}" Foreground="{DynamicResource Warn}" Margin="2,8,0,0" Visibility="Collapsed"/>
           </Grid>
 
           <!-- the install at work: how far it is, its steps one a row, the one at work marked -->
@@ -210,7 +210,7 @@
                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"/>
             <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="2,12,0,0">
               <Button x:Name="LogLink" Style="{StaticResource Link}" Margin="0,0,22,0" Click="LogToggled"/>
-              <Button x:Name="CancelLink" Style="{StaticResource Link}" Foreground="{StaticResource BoneSoft}" Click="CancelBuild"/>
+              <Button x:Name="CancelLink" Style="{StaticResource Link}" Foreground="{DynamicResource BoneSoft}" Click="CancelBuild"/>
             </StackPanel>
           </Grid>
 
@@ -228,12 +228,12 @@
             <TextBlock x:Name="ProblemHead" Grid.Row="2" Style="{StaticResource Section}" Margin="2,16,0,4"/>
             <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
               <StackPanel Margin="2,0,0,0">
-                <TextBlock x:Name="ProblemText" Style="{StaticResource Body}" Foreground="{StaticResource Bone}"/>
+                <TextBlock x:Name="ProblemText" Style="{StaticResource Body}" Foreground="{DynamicResource Bone}"/>
                 <StackPanel x:Name="ProblemSteps" Margin="0,10,0,0"/>
               </StackPanel>
             </ScrollViewer>
             <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="2,14,0,0">
-              <Button x:Name="BackLink" Style="{StaticResource Link}" Foreground="{StaticResource BoneSoft}" Margin="0,0,22,0" Click="Back"/>
+              <Button x:Name="BackLink" Style="{StaticResource Link}" Foreground="{DynamicResource BoneSoft}" Margin="0,0,22,0" Click="Back"/>
               <Button x:Name="RepairLink" Style="{StaticResource Link}" Margin="0,0,22,0" Click="Repair"/>
               <Button x:Name="DetailsLink" Style="{StaticResource Link}" Margin="0,0,22,0" Click="ProblemShowDetails"/>
               <Button x:Name="CopyLink" Style="{StaticResource Link}" Click="CopyForReport"/>
@@ -289,18 +289,18 @@
               </ScrollViewer>
             </Grid>
             <!-- what the selected row does: in a box of its own under the rows, as the in-game menu has it (the rows keep one height) -->
-            <Border x:Name="OptionsHelp" Grid.Row="2" BorderThickness="3,0,0,0" BorderBrush="{StaticResource Red}" Padding="12,2,8,2" Margin="8,10,8,0" Height="62">
-              <TextBlock x:Name="OptionsHelpText" FontSize="13" LineHeight="18" Foreground="{StaticResource HelpInk}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+            <Border x:Name="OptionsHelp" Grid.Row="2" BorderThickness="3,0,0,0" BorderBrush="{DynamicResource Red}" Padding="12,2,8,2" Margin="8,10,8,0" Height="62">
+              <TextBlock x:Name="OptionsHelpText" FontSize="13" LineHeight="18" Foreground="{DynamicResource HelpInk}" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
             </Border>
-            <TextBlock x:Name="HomeFoot" Grid.Row="3" Style="{StaticResource RowHint}" Foreground="{StaticResource BoneFaint}" Margin="12,8,0,0"/>
+            <TextBlock x:Name="HomeFoot" Grid.Row="3" Style="{StaticResource RowHint}" Foreground="{DynamicResource BoneFaint}" Margin="12,8,0,0"/>
           </Grid>
         </Grid>
       </Border>
     </Grid>
 
     <!-- while the game runs: the cartridge is in, a small label says so -->
-    <Grid x:Name="PlayingOverlay" Grid.Row="1" Background="{StaticResource Shell}" Visibility="Collapsed">
-      <Border Background="{StaticResource Label}" CornerRadius="12" Padding="40,30" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="620">
+    <Grid x:Name="PlayingOverlay" Grid.Row="1" Background="{DynamicResource Shell}" Visibility="Collapsed">
+      <Border Background="{DynamicResource Label}" CornerRadius="12" Padding="40,30" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="620">
         <StackPanel>
           <Border Style="{StaticResource Strip}" HorizontalAlignment="Center">
             <TextBlock x:Name="PlayingTitle" Style="{StaticResource ViewTitle}" FontSize="24"/>

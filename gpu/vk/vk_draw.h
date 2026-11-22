@@ -19,7 +19,8 @@ struct PipeNote {
     NvnState s;
 };
 /// (vk_predict.cpp) The pipelines the notes predict for the kept graphics program variants no note names (key 0: not made yet)
-std::vector<std::unique_ptr<PipeNote>> predict_pipelines(const std::vector<std::unique_ptr<PipeNote>>& notes, size_t* programs);
+std::vector<std::unique_ptr<PipeNote>> predict_pipelines(const std::vector<std::unique_ptr<PipeNote>>& notes, size_t* programs,
+                                                          size_t* too_big = nullptr);
 }
 
 #include <functional>
@@ -79,6 +80,9 @@ uint64_t ub_generation();
 /// A background thread (shader translation, pipeline builds) reads guest memory from the captures only, never the stream's
 /// uniform updates: that list is the replay's, which grows and is pruned while such a thread runs
 void ub_thread_off();
+/// (relink, 0.7.9.3) the game lets a program object go: the pipelines made ahead for its stages that no draw took go with the
+/// last one (vk_draw.cpp: eager_graphics)
+void eager_graphics_released(const nvn_prog* p);
 /// The pipeline cache to disk (force: whatever was built since the last save; else only after a few new ones)
 void pipeline_cache_save(bool force);
 /// (relink) After the start's precompile: the cache read from the file is let go (its pipelines are made), a small one takes

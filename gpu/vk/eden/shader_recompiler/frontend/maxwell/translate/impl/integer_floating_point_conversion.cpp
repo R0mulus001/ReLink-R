@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "shader_recompiler/frontend/maxwell/translate/impl/common_encoding.h"
@@ -61,6 +63,20 @@ IR::U32 SmallAbs(TranslatorVisitor& v, const IR::U32& value, int bitsize) {
     return IR::U32{v.ir.Select(is_least, value, absolute)};
 }
 
+// (relink) U32 to F32 rounded toward zero. OpConvertUToF rounds to nearest whatever the IR asks, so an input of 2^24 or more could
+// round up (0xffffffff gave 2^32, a hash times 2^-32 reached 1.0). From 2^24 up the float is built from the input's top 24 bits
+// (the exponent from its highest set bit); below, the conversion is exact. RX_VK_CONV_NO_I2F=1: as before
+IR::F32 ConvertU32ToF32TowardZero(TranslatorVisitor& v, const IR::U32& source) {
+    auto& ir = v.ir;
+    const IR::U32 top{ir.FindUMsb(source)};                                   // meaningful only from 2^24 up
+    const IR::U32 drop{ir.ISub(top, ir.Imm32(23))};
+    const IR::U32 mantissa{ir.BitwiseAnd(IR::U32{ir.ShiftRightLogical(source, drop)}, ir.Imm32(0x7fffff))};
+    const IR::U32 exponent{IR::U32{ir.ShiftLeftLogical(IR::U32{ir.IAdd(top, ir.Imm32(127))}, ir.Imm32(23))}};
+    const IR::F32 truncated{ir.BitCast<IR::F32>(IR::U32{ir.BitwiseOr(exponent, mantissa)})};
+    const IR::F32 exact{ir.ConvertIToF(32, 32, false, source)};
+    return IR::F32{ir.Select(ir.IGreaterThan(source, ir.Imm32(0xffffff), false), truncated, exact)};
+}
+
 void I2F(TranslatorVisitor& v, u64 insn, IR::U32U64 src) {
     const Encoding i2f{insn};
     if (i2f.cc != 0) {
@@ -99,7 +115,13 @@ void I2F(TranslatorVisitor& v, u64 insn, IR::U32U64 src) {
         .rounding = CastFpRounding(i2f.fp_rounding),
         .fmz_mode = IR::FmzMode::DontCare,
     };
-    auto value{v.ir.ConvertIToF(size_t(dst_bitsize), size_t(conversion_src_bitsize), is_signed, src, fp_control)};
+    static const bool exact_rz = std::getenv("RX_VK_CONV_NO_I2F") == nullptr;
+    IR::F16F32F64 value{[&]() -> IR::F16F32F64 {
+        if (exact_rz && i2f.int_format == IntFormat::U32 && !is_signed && i2f.float_format == FloatFormat::F32 &&
+            i2f.fp_rounding == FpRounding::RZ)
+            return ConvertU32ToF32TowardZero(v, IR::U32{src});
+        return v.ir.ConvertIToF(size_t(dst_bitsize), size_t(conversion_src_bitsize), is_signed, src, fp_control);
+    }()};
     if (i2f.neg != 0) {
         if (i2f.abs != 0 || !is_signed) {
             // We know the value is positive

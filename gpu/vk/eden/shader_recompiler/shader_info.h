@@ -229,7 +229,9 @@ struct TextureDescriptor {
     u32 count;
     u32 size_shift;
     /// Index in Info::handle_programs when the handle is computed at draw time (read from a
-    /// storage buffer), ~0 when it is the constant buffer word above.
+    /// storage buffer), ~0 when it is the constant buffer word above. With a count above 1, a
+    /// lookup table: the program gives the handle of each array slot (HandleOp::Slot) and the
+    /// shader picks the slot with an index it reads for itself.
     u32 handle_program{~0U};
 
     auto operator<=>(const TextureDescriptor&) const = default;
@@ -417,13 +419,16 @@ enum class HandleOp : u32 {
     Select, ///< condition, true value, false value
     Tee,    ///< slot: keeps the top value in the slot (shared subexpressions)
     Load,   ///< slot: the value kept there
+    Slot,   ///< the descriptor array slot being filled: a program of a lookup table gives the
+            ///< handle of each slot, the shader picking its slot per invocation
 };
 
 /// Runs a handle program; read_cbuf(index, offset) and read_storage(binding, offset) return the
-/// words it reads. Returns nothing for a malformed program.
+/// words it reads, and slot is the descriptor array slot it fills (HandleOp::Slot). Returns
+/// nothing for a malformed program.
 template <typename ReadCbuf, typename ReadStorage>
 std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& read_cbuf,
-                                         ReadStorage&& read_storage) {
+                                         ReadStorage&& read_storage, u32 slot = 0) {
     std::array<u32, 64> stack{};
     std::array<u32, 256> slots{};
     size_t size = 0;
@@ -466,6 +471,10 @@ std::optional<u32> EvaluateHandleProgram(std::span<const u32> code, ReadCbuf&& r
         if (op == HandleOp::Load) {
             const u32 slot = operand();
             push(slot < slots.size() ? slots[slot] : 0U);
+            continue;
+        }
+        if (op == HandleOp::Slot) {
+            push(slot);
             continue;
         }
         if (op == HandleOp::Select) {

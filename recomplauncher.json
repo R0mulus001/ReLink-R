@@ -71,9 +71,15 @@
     },
     {
       "id": "sharpness", "label": "Sharpness", "group": "Display",
-      "help": "Sharpens the picture as it goes to the window. Too much shows halos around edges.",
+      "help": "With the game's own upscaler: sharpens the picture as it goes to the window. Too much shows halos around edges.",
       "slider": { "key": "sharpness", "min": 0, "max": 100, "step": 10, "format": "%d" },
       "defaults": { "sharpness": "0" }
+    },
+    {
+      "id": "upscaler_sharpness", "label": "Upscaler sharpness", "group": "Display",
+      "help": "With NVIDIA DLSS, DLAA or AMD FSR (chosen in the game's menu): sharpens the 3D under the HUD. 40 % is about as crisp as the game's own upscaler.",
+      "slider": { "key": "upscaler_sharpness", "min": 0, "max": 100, "step": 10, "format": "%d" },
+      "defaults": { "upscaler_sharpness": "40" }
     },
     {
       "id": "ultrawide", "label": "Ultrawide", "group": "Display",
@@ -116,12 +122,22 @@
     },
     {
       "id": "fps_counter", "label": "FPS counter", "group": "Smoothness",
-      "help": "Frames per second in the top right corner of the game.",
+      "help": "Frames per second in the top right corner of the game. Detailed: frame times and their graph, 1% low, GPU, VRAM, CPU and RAM.",
       "choices": [
         { "label": "Off", "set": { "fps_counter": "0" } },
-        { "label": "On", "set": { "fps_counter": "1" } }
+        { "label": "On", "set": { "fps_counter": "1" } },
+        { "label": "Detailed", "set": { "fps_counter": "2" } }
       ],
       "defaults": { "fps_counter": "0" }
+    },
+    {
+      "id": "menu_look", "label": "Menu look", "group": "Gameplay",
+      "help": "The colours of the in-game menu (Insert or F1): the cream label, or the same in dark.",
+      "choices": [
+        { "label": "Light", "set": { "menu_look": "0" } },
+        { "label": "Dark", "set": { "menu_look": "1" } }
+      ],
+      "defaults": { "menu_look": "0" }
     },
     {
       "id": "text_speed", "label": "Text speed", "group": "Gameplay",

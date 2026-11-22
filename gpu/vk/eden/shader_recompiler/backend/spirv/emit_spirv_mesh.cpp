@@ -312,8 +312,12 @@ void TaskEpilogue(EmitContext& ctx) {
                 const Id first{ctx.OpIAdd(
                     ctx.U32[1], ctx.Const(MESH_FALLBACK_CAPACITY),
                     ctx.OpIMul(ctx.U32[1], slot, ctx.Const(ctx.mesh_info.payload_words)))};
-                const Id invocation{LocalInvocation(ctx)};
-                Strided(ctx, ctx.mesh_info.payload_words, ctx.mesh_threads, invocation, [&](Id index) {
+                // (relink, issue 182) the whole payload, by this thread alone: the slot is its own. It was copied as a shared
+                // region is, thread i taking words i, i + threads, ...: a slot held one word in 32 of its task's payload and its
+                // mesh workgroup read zeros for the rest. EDEN_FALLBACK_PAYLOAD_STRIDED=1: as before
+                static const bool strided{std::getenv("EDEN_FALLBACK_PAYLOAD_STRIDED") != nullptr};
+                const Id invocation{strided ? LocalInvocation(ctx) : ctx.u32_zero_value};
+                Strided(ctx, ctx.mesh_info.payload_words, strided ? ctx.mesh_threads : 1U, invocation, [&](Id index) {
                     ctx.OpStore(BufferWordAt(ctx, PushU64(ctx, ctx.mesh_fallback_payload_member_index),
                                              ctx.OpIAdd(ctx.U32[1], first, index)),
                                 ctx.OpLoad(ctx.U32[1], PayloadWord(ctx, index)));
@@ -417,6 +421,28 @@ void EmitMeshFallbackVertexBody(EmitContext& ctx) {
             if (!seen) {
                 ctx.Decorate(id, spv::Decoration::Flat);
             }
+        }
+    }
+    // (relink) every generic output starts at (0,0,0,1) and the point size at 1, as a vertex stage's unwritten components are: the
+    // record's lines are stored over them below. The ones no line writes were whatever the registers held on AMD's Windows driver
+    // (specks of colour in bushes on an RX 5500M). RX_VK_MESH_NO_VTX_INIT=1: as before
+    if (!std::getenv("RX_VK_MESH_NO_VTX_INIT")) {
+        for (u32 index = 0; index < IR::NUM_GENERICS; ++index) {
+            for (u32 element = 0; element < 4; ++element) {
+                const GenericElementInfo& info{ctx.output_generics[index][element]};
+                if (!Sirit::ValidId(info.id)) {
+                    continue;
+                }
+                const Id init{element == 3 ? ctx.Const(1.0f) : ctx.f32_zero_value};
+                if (info.num_components == 1) {
+                    ctx.OpStore(info.id, init);
+                } else {
+                    ctx.OpStore(ctx.OpAccessChain(ctx.output_f32, info.id, ctx.Const(element - info.first_element)), init);
+                }
+            }
+        }
+        if (Sirit::ValidId(ctx.output_point_size)) {
+            ctx.OpStore(ctx.output_point_size, ctx.Const(1.0f));
         }
     }
     const MeshInfo& mesh{ctx.mesh_info};
@@ -524,6 +550,15 @@ Id EmitIsbeRead(EmitContext& ctx, Id address) {
     const Id word{ctx.OpLoad(ctx.U32[1], PayloadWord(ctx, index))};
     return ctx.OpSelect(ctx.U32[1], ctx.OpIEqual(ctx.U1, address, ctx.u32_zero_value), self,
                         word);
+}
+
+/// (relink) ISBERD.O: the word EmitIsbeWriteAttribute writes at that address, read back (a task program reading its payload)
+Id EmitIsbeReadOutput(EmitContext& ctx, Id address) {
+    const Id index{ctx.OpShiftRightLogical(ctx.U32[1], address, ctx.Const(2U))};
+    if (ctx.stage == Stage::Task) {
+        return ctx.OpLoad(ctx.U32[1], PayloadWord(ctx, index));
+    }
+    return ctx.OpLoad(ctx.U32[1], SharedWord(ctx, ctx.mesh_attributes, Clamped(ctx, index, ctx.mesh_attribute_words)));
 }
 
 void EmitIsbeWriteAttribute(EmitContext& ctx, Id address, Id value) {

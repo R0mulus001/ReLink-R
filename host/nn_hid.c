@@ -337,6 +337,16 @@ static void live_input(void) {
                 if (!strncmp(line, "!flasharm", 9)) rx_flash_dark_arm();
                 extern volatile int hos_oot_live_action;   /* host/hos_main.c: "!cheat <action>", as the Cheats page sends */
                 if (!strncmp(line, "!cheat ", 7)) __atomic_store_n(&hos_oot_live_action, atoi(line + 7), __ATOMIC_RELAXED);
+                /* "!event <name>": the event the next teleports ask for instead of the map change (host/hos_main.c
+                   oot_teleport, as HOS_OOT_TELEPORT_EVENT but changed in the middle of a run); "!event -": the map change again */
+                extern char hos_oot_live_event[96];
+                if (!strncmp(line, "!event ", 7)) {
+                    size_t k = 0;
+                    for (const char *q = line + 7; *q && *q != '\n' && *q != '\r' && *q != ' ' && k + 1 < sizeof hos_oot_live_event; q++)
+                        hos_oot_live_event[k++] = *q;
+                    hos_oot_live_event[k] = 0;
+                    if (!strcmp(hos_oot_live_event, "-")) hos_oot_live_event[0] = 0;
+                }
                 /* "!pos x y z": Link moved to that position in the map he is in (host/hos_main.c, the return cheat) */
                 extern volatile int hos_oot_live_pos_pending;
                 extern volatile float hos_oot_live_pos[3];

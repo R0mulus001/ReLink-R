@@ -568,17 +568,45 @@ static int no_builder(Ctx *c, const char *what) {
     if (told++ < 4) hos_log("nvn: %s of no texture builder (lr %#llx): 0", what, (unsigned long long)c->x[30]);
     return 1;
 }
+/* (relink) A character's shadow map (a square depth texture, one level, NVN format 0x34, side 385..1920) has a side that
+   changes by a few pixels from frame to frame with the camera. The game makes a frame's render targets one after another in a
+   first-fit heap, asking each one's size and alignment here, so a map a few pixels larger shifted every target made after it
+   to a new address: each a new texture for the game and a new image for the renderer (15 made a frame in the market). Such a
+   map is answered the storage of the next multiple of 384 up instead, so the targets after it keep their addresses until the
+   side crosses a step. The texture itself keeps its own size and layout. HOS_SHADOW_BUCKET=<step>, 0: every map its own size.
+   The layout of the side reserved, or 0 when the texture reserves its own */
+static int shadow_bucket_layout(const nvn_texdesc *d, nvn_texlayout *out) {
+    static int step = -1;
+    if (step < 0) {
+        const char *e = getenv("HOS_SHADOW_BUCKET");
+        step = e && *e ? atoi(e) : 384;
+        if (step < 0) step = 0;
+    }
+    if (!step || d->target != NVN_TEXTURE_TARGET_2D || d->format != 0x34 || d->levels != 1 || d->depth > 1 ||
+        d->width != d->height || d->width <= 384 || d->width > 1920)
+        return 0;
+    uint32_t side = (d->width + (uint32_t)step - 1) / (uint32_t)step * (uint32_t)step;
+    if (side > 1920) side = 1920;
+    if (side == d->width) return 0;
+    nvn_texdesc slot = *d;
+    slot.width = slot.height = side;
+    nvn_tex_layout(&slot, out);
+    return 1;
+}
 NV(nvnTextureBuilderGetStorageSize) {
     if (no_builder(c, "storage size")) { RET(0); return; }
-    nvn_texlayout L;
+    nvn_texlayout L, slot;
     nvn_tex_layout(&CTB(P(0))->d, &L);
     if (!L.bpb) hos_log("nvn: texture format %#x unknown: storage size 0", CTB(P(0))->d.format);
+    if (L.bpb && shadow_bucket_layout(&CTB(P(0))->d, &slot) && slot.size > L.size) L.size = slot.size;
     RET(L.size);
 }
 NV(nvnTextureBuilderGetStorageAlignment) {
     if (no_builder(c, "storage alignment")) { RET(512); return; }
-    nvn_texlayout L;
+    nvn_texlayout L, slot;
     nvn_tex_layout(&CTB(P(0))->d, &L);
+    /* (the bucket's alignment where it is the larger: one alignment for every side within a step, the texture's own still met) */
+    if (L.bpb && shadow_bucket_layout(&CTB(P(0))->d, &slot) && slot.align > L.align) L.align = slot.align;
     RET(L.align);
 }
 NV(nvnTextureBuilderGetZCullStorageSize) { RET(0); }   /* no ZCull: nothing to store */
@@ -988,11 +1016,18 @@ static int set_shaders(nvn_prog *o, int n, const uint8_t *sd, int stride) {
         }
     }
     o->serial = new_serial();
-    /* (relink) a compute program (one stage, its control section's stage 5): its pipeline made ahead, on the back end's workers */
-    if (n == 1 && o->sd[0].control) {
+    /* (relink) every program the game sets is named to the back end, whose workers make ahead what its draws would wait for: a
+       compute program's pipeline (0.7.6), and from 0.7.9.3 the graphics pipelines play has noted for these stages (vk_draw.cpp:
+       eager_graphics). HOS_PROGRAM_SET=compute: only the compute programs, as before 0.7.9.3 */
+    if (n >= 1 && o->sd[0].control) {
+        static int only_compute = -1;
+        if (only_compute < 0) {
+            const char *e = getenv("HOS_PROGRAM_SET");
+            only_compute = e && !strcmp(e, "compute");
+        }
         uint16_t st = 0;
         memcpy(&st, (const uint8_t *)GP(o->sd[0].control) + 0x56, 2);
-        if (st == 5) rx_nvn_program_set(o);
+        if (!only_compute || (n == 1 && st == 5)) rx_nvn_program_set(o);
     }
     return 1;
 }

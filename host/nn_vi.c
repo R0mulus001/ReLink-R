@@ -213,6 +213,14 @@ static int fps_max(void) {
     if (unlocked || env > 60) {
         cap = env > 60 ? env : display_hz();
         cap = cap < 60 ? 60 : cap > 240 ? 240 : cap;
+        /* (relink, 0.7.9.3) 60 while a movie plays. The game's events count a movie in frames, one a frame drawn: at 120 fps
+           the credits' last event reached its end in half the movie's time, put "The End" over the wrong picture and left a
+           black screen after the button (seen on 20/11 with the ending's events run by hand; at 60 fps the same run goes
+           through). The movies are 60 fps pictures: nothing is lost. HOS_VIDEO_UNLOCKED=1: as before */
+        static int video_unlocked = -1;
+        if (video_unlocked < 0) video_unlocked = getenv("HOS_VIDEO_UNLOCKED") != NULL;
+        int hos_video_playing(void);
+        if (cap > 60 && !video_unlocked && hos_video_playing()) cap = 60;
     }
     static int told;   /* (the cap in the log, at the start and when it changes: a report says which it was) */
     if (cap != told) {
@@ -263,6 +271,12 @@ void hos_vi_native_acquire(int active) {
     static int no_pacing = -1, double_buffered = -1;
     if (no_pacing < 0) no_pacing = getenv("HOS_NO_PACING") != NULL;
     if (double_buffered < 0) double_buffered = getenv("HOS_VI_DOUBLE") != NULL;
+    {   /* (a test) HOS_TEST_SLOW_MS=<ms>: each frame's acquire held that much longer, as on a PC that cannot hold the frame
+           rate (two players' endings hung with the movies at 40 to 53 fps) */
+        static int64_t slow_ns = -1;
+        if (slow_ns < 0) slow_ns = getenv("HOS_TEST_SLOW_MS") ? (int64_t)(atof(getenv("HOS_TEST_SLOW_MS")) * 1e6) : 0;
+        if (slow_ns > 0) hos_sleep_ns(slow_ns);
+    }
     if (no_pacing || !next_frame_at) return;
     int64_t until = next_frame_at;
     if (!double_buffered && active >= 2) {
@@ -359,6 +373,134 @@ volatile float hos_fov_scale = 1.0f;
    below and never more than 60: unlocked, the step stayed 1/60 s and the whole game ran at fps / 60 times its speed (x1.77
    at 102 fps, x1.24 at 75, measured with HOS_STEP_LOG=1). HOS_STEP_RATE_OLD=1: never set, as before */
 volatile int hos_step_fps = 0;
+/* (relink, issue 120) The water's ripple steps above 60 fps (nx2/oot_ripples.py): the game cuts the frame's step (bits, a
+   float, 1.0 at 60 fps) to an integer, 0 at every frame above 60 fps, and the rings in water stood still. The step is added to
+   a remainder kept for each surface (key) and its whole part handed out, so each surface runs at the game's 60 steps a second.
+   64 slots, the least recently used taken for a new surface (a scene's surfaces each come every frame). HOS_RIPPLES_CUT=1: the
+   game's cut, as before */
+uint32_t hos_ripple_steps(uint64_t key, uint32_t bits) {
+    static int cut = -1;
+    if (cut < 0) cut = getenv("HOS_RIPPLES_CUT") != NULL;
+    float step;
+    memcpy(&step, &bits, 4);
+    if (!(step > 0.0f) || step > 16.0f) return 0;   /* (NaN, none or absurd: nothing, as the cut of a NaN would) */
+    if (cut) return (uint32_t)step;
+    enum { SLOTS = 64 };
+    static uint64_t keys[SLOTS], used[SLOTS], clock;
+    static float rem[SLOTS];
+    static SRWLOCK lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&lock);
+    int at = -1, oldest = 0;
+    for (int i = 0; i < SLOTS; i++) {
+        if (keys[i] == key && used[i]) { at = i; break; }
+        if (used[i] < used[oldest]) oldest = i;
+    }
+    if (at < 0) at = oldest, keys[at] = key, rem[at] = 0.0f;
+    used[at] = ++clock;
+    rem[at] += step;
+    const uint32_t whole = (uint32_t)rem[at];
+    rem[at] -= (float)whole;
+    ReleaseSRWLockExclusive(&lock);
+    return whole;
+}
+/* (relink) The game's other whole-step counters above 60 fps (nx2/oot_step_cuts.py): the pick-up counter above Link's head
+   (site 1), the time of day (2) and the Deku Tree's web (3) cut the frame's step times something to an integer, 0 at every
+   frame above 60 fps, so the count froze. Same as the ripples: bits is the float they cut, added to a remainder kept for the
+   object (key) and its whole part handed out; game is what the game cut, returned for a value no step could be (NaN, none,
+   absurd). 96 slots shared by the sites, each keeping its own keys. HOS_PICKUP_CUT=1, HOS_CLOCK_CUT=1, HOS_WEB_CUT=1: the game's
+   cut at that site, as before */
+uint32_t hos_whole_steps(uint32_t site, uint64_t key, uint32_t bits, uint32_t game) {
+    static const char *const names[4] = {NULL, "HOS_PICKUP_CUT", "HOS_CLOCK_CUT", "HOS_WEB_CUT"};
+    static int cut[4] = {-1, -1, -1, -1};
+    if (site >= 4 || !names[site]) return game;
+    if (cut[site] < 0) cut[site] = getenv(names[site]) != NULL;
+    float step;
+    memcpy(&step, &bits, 4);
+    if (cut[site] || !(step > 0.0f) || step > 4096.0f) return game;
+    enum { SLOTS = 96 };
+    static uint64_t keys[SLOTS], used[SLOTS], clock;
+    static uint32_t sites[SLOTS];
+    static float rem[SLOTS];
+    static SRWLOCK lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&lock);
+    int at = -1, oldest = 0;
+    for (int i = 0; i < SLOTS; i++) {
+        if (used[i] && keys[i] == key && sites[i] == site) { at = i; break; }
+        if (used[i] < used[oldest]) oldest = i;
+    }
+    if (at < 0) at = oldest, keys[at] = key, sites[at] = site, rem[at] = 0.0f;
+    used[at] = ++clock;
+    rem[at] += step;
+    const uint32_t whole = (uint32_t)rem[at];
+    rem[at] -= (float)whole;
+    ReleaseSRWLockExclusive(&lock);
+    return whole;
+}
+/* (relink) The physics solver's step count above 60 fps (nx2/oot_step_cuts.py, the two places the game sets it): the game
+   cuts step * steps of a 60 fps frame + 0.001 (scaled_bits, a float; per_frame_bits, the steps of a 60 fps frame, a float)
+   to an integer, short under a step of 1 and changing frame to frame as the measured step wanders (8 x 0.49 is 3, 8 x 0.5 is
+   4), so a moving platform slid out from under Link. Under a step of 1 the count is rounded up instead, with a tenth of a
+   step's leeway for the frame time's jitter, at least 1 and never under the game's; a step of 1 or more keeps the game's.
+   HOS_SOLVER_CUT=1: the game's count, as before */
+uint32_t hos_solver_steps(uint32_t game, uint32_t scaled_bits, uint32_t per_frame_bits) {
+    static int cut = -1;
+    if (cut < 0) cut = getenv("HOS_SOLVER_CUT") != NULL;
+    float scaled, per_frame;
+    memcpy(&scaled, &scaled_bits, 4);
+    memcpy(&per_frame, &per_frame_bits, 4);
+    scaled -= 0.001f;
+    if (cut || !(scaled > 0.0f) || !(per_frame > 0.0f) || per_frame > 1000.0f || !(scaled < per_frame)) return game;
+    const float want = scaled - 0.1f;
+    int32_t steps = (int32_t)want;
+    if ((float)steps < want) steps++;
+    if (steps < 1) steps = 1;
+    return (int32_t)game > steps ? game : (uint32_t)steps;
+}
+/* (relink) The sound manager's job above 60 fps (nx2/oot_step_cuts.py): it hands the step to the sound engine, whose fade and
+   delay timers count updates of at least one whole step; fed less (0.5 at 120 fps) voices were not released when an area
+   unloaded, the voices in use climbed to the game's budget and then new sounds and the music stopped. Above 60 fps the job
+   runs at 60 Hz: phase 0 (the job's phase, w2) adds the step to a remainder and the job runs once a whole step has built up,
+   the engine handed a step of 1 (hos_sound_step); the other phases follow that frame's choice. A step of 1 or more runs as
+   the game has it and keeps the remainder (around 60 fps steps of 0.98 and 1.02 alternate: dropping the 0.98 ran the sound
+   clock at half the real one); 0, under 0 and NaN run as the game has them. Every phase runs while the step is not
+   followed (hos_step_fps 0). HOS_SOUND_CUT=1: the job every frame with the game's step, as before */
+static struct { float part; int run, partial; SRWLOCK lock; } sound_gate = {0.0f, 1, 0, SRWLOCK_INIT};
+int hos_sound_gate(uint32_t phase, uint32_t step_bits) {
+    static int cut = -1;
+    if (cut < 0) cut = getenv("HOS_SOUND_CUT") != NULL;
+    int run;
+    AcquireSRWLockExclusive(&sound_gate.lock);
+    if (phase != 0) {
+        run = sound_gate.run;
+    } else {
+        float step;
+        memcpy(&step, &step_bits, 4);
+        sound_gate.partial = 0;
+        if (cut || hos_step_fps <= 60 || !(step > 0.0f)) {
+            sound_gate.part = 0.0f;
+            sound_gate.run = 1;
+        } else if (step >= 1.0f) {
+            sound_gate.run = 1;
+        } else {
+            sound_gate.partial = 1;
+            sound_gate.part += step;
+            sound_gate.run = sound_gate.part >= 1.0f;
+            if (sound_gate.run) sound_gate.part -= 1.0f;
+            static int told;
+            if (!told) told = 1, hos_log("vi: the sound job runs at 60 Hz above 60 fps (step %.3f)", step);
+        }
+        run = sound_gate.run;
+    }
+    ReleaseSRWLockExclusive(&sound_gate.lock);
+    return run;
+}
+/* The step the job hands the engine after its load: a whole one while the gate holds it to 60 Hz */
+uint32_t hos_sound_step(uint32_t step_bits) {
+    AcquireSRWLockExclusive(&sound_gate.lock);
+    const int partial = sound_gate.partial;
+    ReleaseSRWLockExclusive(&sound_gate.lock);
+    return partial ? 0x3f800000u : step_bits;
+}
 /* The Insert menu's Text speed (0 Normal, 1 2x, 2 4x, 3 Instant), HOS_TEXT_SPEED=<0..3> over it: what the time of a letter
    animation's step is multiplied by. Instant: the page at once, as the game's own skip on A */
 static float text_scale(const char *env, int menu) {
@@ -467,6 +609,12 @@ static void realtime_step(int64_t now) {
     ratio = ratio < least ? least : ratio > 4.0 ? 4.0 : ratio;
     int fps = (int)(60.0 / ratio + 0.5);
     fps = fps < 15 ? 15 : fps > top ? top : fps;
+    {   /* (test runs) HOS_TEST_STEP_FPS=<n>: the game's step is 1/n s whatever the frames take: the steps of a frame rate
+           the bench cannot reach, in slow motion (issue 158 names 144 fps, the bench draws that room at 100 to 113) */
+        static int forced = -1;
+        if (forced < 0) forced = getenv("HOS_TEST_STEP_FPS") ? atoi(getenv("HOS_TEST_STEP_FPS")) : 0;
+        if (forced >= 15 && forced <= 240) fps = forced;
+    }
     int *slot = (int *)GP(mod + 0x2c8);
     if (*slot < 15 || *slot > 240) {
         static int logged;

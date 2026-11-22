@@ -37,6 +37,16 @@ bool astc_native() {
     }
     return known == 1;
 }
+/// R5G5B5A1 has no mandatory support (A1R5G5B5 does): A1BGR5 textures are left out where the GPU does not sample it
+bool r5g5b5a1_sampled() {
+    static signed char known = -1;
+    if (known < 0) {
+        VkFormatProperties p{};
+        vkGetPhysicalDeviceFormatProperties(dev.physical, VK_FORMAT_R5G5B5A1_UNORM_PACK16, &p);
+        known = (p.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ? 1 : 0;
+    }
+    return known == 1;
+}
 } // namespace
 
 VkFormatInfo vk_format(int nvn_format) {
@@ -133,6 +143,20 @@ VkFormatInfo vk_format(int nvn_format) {
     case NVN_FORMAT_BPTC_UFLOAT: return {VK_FORMAT_BC6H_UFLOAT_BLOCK, false, 1, 1};
     case NVN_FORMAT_BGRX8: return {VK_FORMAT_B8G8R8A8_UNORM, false, 1, 1};
     case NVN_FORMAT_BGRX8_SRGB: return {VK_FORMAT_B8G8R8A8_SRGB, false, 1, 1};
+    // (relink) These had no Vulkan format, so their textures were left out. BGRA8 as the X ones above; the 16-bit ones named low bits
+    // first, as RGB565 is: BGR5A1 has B in the low bits, which is A1R5G5B5's layout; A1BGR5 has A there, R5G5B5A1's, which a
+    // device need not sample (left out then). BGR5 has no alpha bit: its view reads alpha as one (vk_texture.cpp).
+    // RX_VK_NO_NEW_FORMATS=1: left out as before
+    case NVN_FORMAT_BGRA8: case NVN_FORMAT_BGRA8_SRGB: case NVN_FORMAT_BGR5A1: case NVN_FORMAT_BGR5: case NVN_FORMAT_A1BGR5: {
+        static const bool off = getenv("RX_VK_NO_NEW_FORMATS") != nullptr;
+        if (off) return {VK_FORMAT_UNDEFINED, false, 1, 1};
+        switch (nvn_format) {
+        case NVN_FORMAT_BGRA8: return {VK_FORMAT_B8G8R8A8_UNORM, false, 1, 1};
+        case NVN_FORMAT_BGRA8_SRGB: return {VK_FORMAT_B8G8R8A8_SRGB, false, 1, 1};
+        case NVN_FORMAT_A1BGR5: return {r5g5b5a1_sampled() ? VK_FORMAT_R5G5B5A1_UNORM_PACK16 : VK_FORMAT_UNDEFINED, false, 1, 1};
+        default: return {VK_FORMAT_A1R5G5B5_UNORM_PACK16, false, 1, 1};
+        }
+    }
     default: return {VK_FORMAT_UNDEFINED, false, 1, 1};
     }
 }
