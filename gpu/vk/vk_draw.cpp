@@ -3032,6 +3032,7 @@ thread_local bool hz_build_unknown = true;         // (it reaches memory the ran
 thread_local std::vector<HzRange> hz_since;        // (the dispatches since the last barrier: their ranges)
 thread_local bool hz_since_ok = false;             // (all of them known, nothing else recorded since)
 thread_local uint64_t hz_epoch_after = 0;          // (thread_work right after the last of them)
+std::atomic<int64_t> st_pass_relaxed{0}, st_pass_full{0};   // (ReLink-R 0.0.6, RX_VK_GAME_ORDER: pass_start_barrier)
 thread_local VkCommandBuffer hz_cmd = VK_NULL_HANDLE;
 std::atomic<int64_t> st_hz_skipped{0}, st_hz_kept{0};
 bool dispatch_hazards_on() {
@@ -3643,6 +3644,10 @@ struct Pushed {
 };
 TLS_OBJECT(pushed, std::array<Pushed, 2>)   // [graphics, compute]
 } // namespace
+/// (ReLink-R 0.0.6, RX_VK_GAME_ORDER) pass-start barriers so far: fragment-only, full
+void pass_barrier_stats(int64_t* relaxed, int64_t* full) {
+    *relaxed = st_pass_relaxed.load(std::memory_order_relaxed), *full = st_pass_full.load(std::memory_order_relaxed);
+}
 /// (ReLink-R 0.0.4, RX_VK_DISPATCH_HAZARDS) the dispatches' barriers left out (independent of the dispatches since the last one)
 /// and recorded, so far
 void dispatch_hazard_stats(int64_t* skipped, int64_t* kept) {
@@ -4361,7 +4366,6 @@ bool targets_persistent(const Targets& at) {
 namespace {
 thread_local VkCommandBuffer pass_end_cmd = VK_NULL_HANDLE;   // (this thread's last pass end, and its work count right after it)
 thread_local uint64_t pass_end_work = 0;
-std::atomic<int64_t> st_pass_relaxed{0}, st_pass_full{0};
 bool game_order() {
     static const bool on = [] {
         const char* e = getenv("RX_VK_GAME_ORDER");
@@ -4392,10 +4396,6 @@ void pass_start_barrier(VkCommandBuffer cmd, bool stand_in) {
     vkCmdPipelineBarrier2(cmd, &d);   // (counts as work: the next full barrier is not left out after this one)
 }
 } // namespace
-/// (ReLink-R 0.0.6, RX_VK_GAME_ORDER) pass-start barriers so far: fragment-only, full
-void pass_barrier_stats(int64_t* relaxed, int64_t* full) {
-    *relaxed = st_pass_relaxed.load(std::memory_order_relaxed), *full = st_pass_full.load(std::memory_order_relaxed);
-}
 void begin_pass(VkCommandBuffer cmd, const Targets& at) {
     Pass& ps = pass();   // One TLS accessor for this recording thread's pass state.
     bool same = ps.open && ps.depth == at.depth_view && ps.n == at.n && ps.width == at.width &&
