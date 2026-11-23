@@ -453,14 +453,7 @@ static void poke_multiwait(Obj *o) {
 
 #if (defined(__x86_64__) || defined(_M_X64)) && !defined(__EMSCRIPTEN__)
 #include <emmintrin.h>
-static int64_t spin_ns(void) {
-    static int64_t ns = -1;
-    if (ns < 0) {
-        const char *e = getenv("HOS_SPIN_US");
-        ns = (e ? atoll(e) : 20) * 1000;
-    }
-    return ns;
-}
+static int64_t spin_ns(void) { return hos_spin_ns(); }   /* (ReLink-R 0.0.5: by the thread's role, hos_thread.c) */
 static int spin_begin(Obj *o, int *misses) {
     if (spin_ns() <= 0) return 0;
     static int adaptive = -1;

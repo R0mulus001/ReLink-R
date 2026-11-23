@@ -111,6 +111,8 @@ void hos_thread_start(HosThread *t);
 void hos_thread_join(HosThread *t);
 void hos_thread_destroy(HosThread *t);
 void hos_thread_set_name(HosThread *t, const char *name);
+int hos_thread_serial(const HosThread *t);   /* (ReLink-R 0.0.5) one of the frame's serial threads (game thread, Presentation Thread) */
+int64_t hos_spin_ns(void);   /* (ReLink-R 0.0.5) the calling thread's spin before a wait sleeps, ns (HOS_SPIN_US, HOS_SPIN_OTHER_US) */
 void hos_thread_pin(void *h, const char *name);   /* HOS_PIN: host CPU affinity by thread name */
 int hos_game_cores(void);   /* totk_cores.c: HOS_GAME_CORES, or 0 */
 const char *hos_thread_name(HosThread *t);
