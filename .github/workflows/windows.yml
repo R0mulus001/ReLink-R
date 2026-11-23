@@ -199,6 +199,10 @@ jobs:
           key: ${{ steps.llvm.outputs.name }}
       - name: llvm-mingw
         run: echo "RELINK_MINGW=$(python -I scripts/release_parts.py llvm-mingw "$RUNNER_TEMP/llvm")" >> "$GITHUB_ENV"
+      # (ReLink-R 0.0.5: the game's runtime, host/*.c, compiled as a player's PC compiles it, syntax only: it used to be checked
+      # only there, in the middle of an install)
+      - name: The game's runtime compiles
+        run: python -I scripts/check_host.py "$RELINK_MINGW/bin/x86_64-w64-mingw32-clang"
       # (the back end alone, no lift, no game)
       - name: relink_vk.dll
         env:
