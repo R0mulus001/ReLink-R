@@ -5,6 +5,12 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.6-dev**: a lighter graphics-card frame, from the Hookshot family. A draw pass right after another no longer makes the GPU
+  empty itself first: it waits only in its fragment stages, the game's own barriers order the rest (Hookshot #2559, NVIDIA by
+  default, `RX_VK_GAME_ORDER`); the 1,300-2,600 small copies a frame that bring the CPU's pages into the GPU's mirrors go as one
+  compute job a sync (Hookshot #3023, `RX_VK_MSYNC_PASS`); grass, ferns and leaves keep their passes: their arguments are converted
+  together at the game's barriers instead of each draw ending its pass with four barriers, a fill and a copy (Longshot 9027e7374
+  via HeyListen, `RX_VK_MESH_CONV`). Each switch at 0 goes back to 0.0.5-dev's way.
 - **0.0.5-dev**: less wasted work, from the Hookshot family. Fewer idle game threads spin while they wait (Hookshot #2263,
   #2709: on PCs with 6 threads or fewer the game's short sleeps use the timer); a signal with no waiter returns at once
   (Hookshot #2708); events are one atomic word and an uncontended yield takes no lock (Longshot #1553); Castle Town's market
