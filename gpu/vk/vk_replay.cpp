@@ -31,6 +31,7 @@
 #include "status_line.h"
 #include "vk_reflex.h"
 #include "vk_draw.h"
+#include "mesh_conv.h"   // (ReLink-R 0.0.6, RX_VK_MESH_CONV=2: the indirect mesh draws after a barrier of the game's, scanned there)
 #include "vk_dump.h"
 #include "vk_gprof.h"
 #include "vk_framegen.h"
@@ -1204,9 +1205,43 @@ bool buf_unchanged(int32_t stage, int32_t index, uint64_t addr, uint64_t size, i
     return stage == nstage && index == nindex && addr == naddr && size == nsize;
 }
 
+// (ReLink-R 0.0.6, from Longshot 9027e7374 via HeyListen c9603f66) RX_VK_MESH_CONV=2: the scans after the game's barriers, by why
+// each ended (mesh_conv.h Stop), for the log's line every 120 frames
+std::atomic<int64_t> st_mc_stops[mesh_conv::kStops];
+thread_local const uint8_t* mesh_rescan_at = nullptr;   // (the op the last scan ended at, with mesh draws after it: replay())
+/// Right after a barrier of the game's (the pass ended, a full barrier recorded), or right after the op that ended the scan before
+/// (a counter's report, an event's wait, a dispatch, a copy: replay() once the op is recorded): the indirect mesh draws from next up
+/// to the next barrier, the first op that may write buffer memory or the stream's end, converted here at once (vk_draw.cpp
+/// mesh_conv_batch)
+void mesh_conv_at_barrier(VkCommandBuffer cmd, const uint8_t* next, const uint8_t* end) {
+    mesh_rescan_at = nullptr;
+    if (!mesh_conv_batching()) return mesh_conv_batch(cmd, nullptr, 0);
+    // (ops that record no GPU write to buffer memory in stream order: state, binds, draws (one whose program writes memory drops the
+    // batch as it is drawn: vk_draw.cpp), attachment clears, uniform updates (written to memory at the recording's end), counters'
+    // resets, render conditions; NOP_JUMP and NOP_CALL, which the replay passes over: its stream is laid out in order)
+    static const uint32_t pass_ops[] = {NOP_BEGIN, NOP_JUMP, NOP_CALL, NOP_UPDATE_UB, NOP_SET_RT, NOP_CLEAR_COLOR, NOP_CLEAR_DS, NOP_VIEWPORTS, NOP_SCISSOR,
+                                        NOP_DEPTH_RANGE, NOP_BIND_PROGRAM, NOP_BIND_STATE, NOP_BIND_VATTR, NOP_BIND_VSTREAM,
+                                        NOP_BIND_VBUF, NOP_BIND_UBO, NOP_BIND_SSBO, NOP_BIND_TEX, NOP_BIND_SAMP, NOP_STENCIL,
+                                        NOP_POLY_OFFSET, NOP_DRAW, NOP_DRAW_IDX, NOP_SET_TEX_POOL, NOP_SET_SAMP_POOL, NOP_COPY_STRIDE,
+                                        NOP_BLEND_COLOR, NOP_BIND_IMG, NOP_RESET_COUNTER, NOP_DEPTH_CLAMP, NOP_RENDER_ENABLE,
+                                        NOP_RASTER_DISCARD, NOP_RENDER_COND, NOP_PRIMITIVE_RESTART, NOP_BIND_BUFS, NOP_DRAW_INDIRECT,
+                                        NOP_PUSH_CONST};
+    static const mesh_conv::Ops ops{NOP_END, NOP_BARRIER, NOP_DRAW_MESH, pass_ops, sizeof pass_ops / sizeof pass_ops[0]};
+    thread_local std::vector<mesh_conv::Item> items;
+    uint32_t stop_op = 0;
+    const uint8_t* at = nullptr;
+    // (at most 1 MB of slots and 256 draws a batch: a quarter of the ring, so the batch never comes round onto itself)
+    const mesh_conv::Stop why = mesh_conv::scan(ops, next, end, items, 1ull << 20, 256, &stop_op, &at);
+    st_mc_stops[why].fetch_add(1, std::memory_order_relaxed);
+    // (an op that may write memory ended it: scanned again once the op is recorded, from the op after it)
+    if (why == mesh_conv::kStopOp) mesh_rescan_at = at;
+    mesh_conv_batch(cmd, items.data(), items.size());
+}
+
 void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* end = nullptr) {
     const Mode mode = rmode;
     const bool dry = mode == Mode::Dry, worker = mode == Mode::Worker;
+    if (!dry) mesh_rescan_at = nullptr, mesh_conv_batch(cmd, nullptr, 0);   // (RX_VK_MESH_CONV=2: no batch carries over from another stretch)
     for (;;) {
         if (p == end) return;
         nvn_op_hdr h;
@@ -1685,6 +1720,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
             }
             end_pass(cmd);
             full_barrier(cmd, "barrier (the game's nvnCommandBufferBarrier)");
+            mesh_conv_at_barrier(cmd, p + h.size, end);   // (ReLink-R 0.0.6, RX_VK_MESH_CONV=2)
             st_barriers++;
             break;
         // ---- work ----
@@ -1759,6 +1795,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 da.groups[0] = d.y, da.groups[1] = 1, da.groups[2] = 1;
                 if (d.kind == 0) da.first_task = d.x;   // (relink: the task programs add it, vk_draw.cpp's mesh_args)
                 da.indirect = d.indirect, da.count_addr = d.count_addr, da.max = d.max, da.stride = d.stride;
+                da.op = p;   // (RX_VK_MESH_CONV=2: mesh_conv_at_barrier's scan named it by this)
                 draw(cmd, s, da);
             }
             s.samples_passed += 16;
@@ -1787,6 +1824,9 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 maybe_split(cmd);
             }
         }
+        // (ReLink-R 0.0.6, RX_VK_MESH_CONV=2: the op that ended the last scan is recorded: the mesh draws after it, before the next
+        // barrier, converted here at once)
+        if (!dry && p == mesh_rescan_at) mesh_conv_at_barrier(cmd, p + h.size, end);
         p += h.size;
     }
 }
@@ -3482,6 +3522,26 @@ void log_frame_stats() {
                 logf("vk: a frame: dispatch barriers %.1f recorded, %.1f left out (independent of the dispatches since the last barrier)",
                      (kp - l_kp) / 120.0, (sk - l_sk) / 120.0);
                 l_sk = sk, l_kp = kp;
+            }
+            {   // (ReLink-R 0.0.6, RX_VK_MESH_CONV: the indirect mesh draws' arguments, vk_draw.cpp)
+                int64_t mc[7];
+                mesh_conv_stats(mc);
+                int64_t stops[mesh_conv::kStops];
+                for (int i = 0; i < mesh_conv::kStops; i++) stops[i] = st_mc_stops[i].exchange(0, std::memory_order_relaxed);
+                logf("vk: a frame: indirect mesh draws' arguments (RX_VK_MESH_CONV=%d): %.1f converted one by one, %.1f from %.1f batches "
+                     "at the game's barriers (%.1f converted in them; %.1f dropped after a write, %.1f the ring came round); scans ended at "
+                     "a barrier %.1f, an op %.1f, the end %.1f, full %.1f",
+                     mesh_conv_mode(), mc[0] / 120.0, mc[1] / 120.0, mc[2] / 120.0, mc[3] / 120.0, mc[4] / 120.0, mc[5] / 120.0,
+                     stops[mesh_conv::kStopBarrier] / 120.0, stops[mesh_conv::kStopOp] / 120.0, stops[mesh_conv::kStopEnd] / 120.0,
+                     stops[mesh_conv::kStopFull] / 120.0);
+            }
+            {   // (ReLink-R 0.0.6, RX_VK_GAME_ORDER: a pass right after another waits in its fragment stages only)
+                static int64_t l_rx, l_fu;
+                int64_t rx = 0, fu = 0;
+                pass_barrier_stats(&rx, &fu);
+                logf("vk: a frame: pass-start barriers %.1f full, %.1f fragment stages only (right after another pass)", (fu - l_fu) / 120.0,
+                     (rx - l_rx) / 120.0);
+                l_rx = rx, l_fu = fu;
             }
             std::string fl;   // (NVN's barrier bits: ORDER_PRIMITIVES 1, ORDER_FRAGMENTS 2, ORDER_FRAGMENTS_TILED 4, ORDER_INDIRECT_DATA 8, INVALIDATE_TEXTURE 0x10, _SHADER 0x20, _TEXTURE_DESCRIPTOR 0x40, _ZCULL 0x80)
             std::lock_guard lk(st_barrier_flags_mu);
