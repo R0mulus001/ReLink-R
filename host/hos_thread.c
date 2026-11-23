@@ -29,6 +29,7 @@ struct HosThread {
     char name[48];
     HANDLE handle;
     int started;
+    int serial;   /* (ReLink-R 0.0.5, from Hookshot #2709) one of the frame's serial threads (hos_thread_serial), set with the name */
     /* the kernel side (hos_svc.c): this thread's Horizon handle and the event it blocks on */
     uint32_t kernel_handle;
     HANDLE wake;
@@ -459,6 +460,7 @@ Ctx *hos_boot_main_thread(uint64_t stack_size) {
     t->ideal_core = 0;
     t->started = 1;
     snprintf(t->name, sizeof t->name, "MainThread");
+    __atomic_store_n(&t->serial, 1, __ATOMIC_RELAXED);
     DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &t->handle, 0, FALSE,
                     DUPLICATE_SAME_ACCESS);   /* a real handle, for the profiler */
     SetThreadDescription(GetCurrentThread(), L"MainThread");   /* (HOS_SAMPLE finds threads by it) */
@@ -591,8 +593,57 @@ void hos_thread_destroy(HosThread *t) {
 }
 
 static void vc_name_prio(HosThread *t);   /* (below) */
+
+/* (ReLink-R 0.0.5, from Hookshot #2709) The frame's serial threads: OoT's game thread (sead::MainThread, the boot thread's
+   MainThread before the game names it) and its Presentation Thread. A frame waits on each in turn, so a wait of theirs
+   that ends late ends the frame late: their short waits stay short (sleep_ns's pollers, hos_spin_ns). By name, kept in the
+   thread's record when it is named. */
+static int serial_name(const char *name) { return strstr(name, "MainThread") || !strcmp(name, "Presentation Thread"); }
+int hos_thread_serial(const HosThread *t) { return t && __atomic_load_n(&t->serial, __ATOMIC_RELAXED); }
+
+/* The processors this process may run on (its affinity mask as the game starts): Windows with one processor group;
+   0 = not known (more than one group, or elsewhere). Up to SHORT_SLEEP_TIMER_THREADS of them the game's short sleeps
+   wait on the timer and every thread keeps one spin (Hookshot #2263, #2709) */
+enum { SHORT_SLEEP_TIMER_THREADS = 6 };
+static int process_threads(void) {
+    static int threads = -1;
+    int n = __atomic_load_n(&threads, __ATOMIC_RELAXED);
+    if (n >= 0) return n;
+    n = 0;
+#if defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    DWORD_PTR proc = 0, sys = 0;
+    if (GetActiveProcessorGroupCount() == 1 && GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys))
+        n = __builtin_popcountll((uint64_t)proc);
+#endif
+    __atomic_store_n(&threads, n, __ATOMIC_RELAXED);
+    return n;
+}
+
+/* (ReLink-R 0.0.5, from Hookshot #2709) How long a wait spins before it sleeps (nn_os_sync.c's events, queues and mutexes;
+   hos_svc.c's mutexes), in ns, for the calling thread: HOS_SPIN_US (20 us) on the frame's serial threads, HOS_SPIN_OTHER_US
+   (5 us, never more than HOS_SPIN_US) on the others where there are more than SHORT_SLEEP_TIMER_THREADS processors. A
+   sleeper runs again 6.6-8.4 us after its signal, so 5 us still catches the quick hand-offs; the rest of a 20 us spin
+   mostly burnt the job workers' processor time (Hookshot: the process's CPU a frame -3.3 % at the same fps, 16 threads).
+   With 6 or fewer, every thread keeps HOS_SPIN_US unless HOS_SPIN_OTHER_US is set. HOS_SPIN_OTHER_US=20: one spin for all,
+   as before; HOS_SPIN_US=0: no spin */
+int64_t hos_spin_ns(void) {
+    static int64_t both = -1;   /* (the serial threads' ns << 32 | the others': one atomic word, chosen once) */
+    int64_t b = __atomic_load_n(&both, __ATOMIC_RELAXED);
+    if (b < 0) {
+        const char *e = getenv("HOS_SPIN_US"), *o = getenv("HOS_SPIN_OTHER_US");
+        int64_t sv = e ? atoll(e) : 20, other = o ? atoll(o) : process_threads() > SHORT_SLEEP_TIMER_THREADS ? 5 : sv;
+        sv = (sv < 0 ? 0 : sv > 1000000 ? 1000000 : sv) * 1000;
+        other = (other < 0 ? 0 : other > 1000000 ? 1000000 : other) * 1000;
+        other = other > sv ? sv : other;
+        b = sv << 32 | other;
+        __atomic_store_n(&both, b, __ATOMIC_RELAXED);
+    }
+    return hos_thread_serial(cur) ? b >> 32 : b & 0xFFFFFFFF;
+}
+
 void hos_thread_set_name(HosThread *t, const char *name) {
     snprintf(t->name, sizeof t->name, "%s", name);
+    __atomic_store_n(&t->serial, serial_name(t->name), __ATOMIC_RELAXED);   /* (atomic: SetThreadName may name another thread) */
     vc_name_prio(t);
     if (t->handle) {
         wchar_t w[48];
@@ -732,6 +783,49 @@ int64_t hos_now_ns(void) {
 }
 
 static void sleep_ns(int64_t ns);
+/* (ReLink-R 0.0.5) set while the game's own sleep runs (hos_sleep_logged: nn::os::SleepThread and the kernel's), so
+   sleep_ns tells it from the host's (the frame limiter, audio, timer events), which keep yielding */
+static _Thread_local int guest_sleep;
+/* (ReLink-R 0.0.5, from Hookshot #2263, #2709) How the game's sleeps under a millisecond wait. Windows cannot sleep 20 us:
+   its high-resolution timer wakes ~0.5 ms late, so a short sleep yields until its time, which keeps a processor busy for
+   every sleeping thread. OoT's idle job workers sleep 20 us and look at their queues again (~7,600 times a second in
+   Hyrule Field). With 6 logical processors or fewer those loops run instead of the threads that make the frame: the
+   game's short sleeps wait on the timer there (#2263). With more, at most HOS_SHORT_SLEEP_POLLERS game threads (default a
+   quarter of the processors, 4 of 16) yield through one at a time; the next waits on the timer until a slot is free
+   (#2709: the process's CPU a frame -25 % on 8 threads, -4.4 % on 16, same fps on a desktop; on a laptop held to its
+   power limit the saving is power the frame's threads get). The serial threads and the host's own sleeps always yield.
+   HOS_SHORT_SLEEP_TIMER: 1 the timer for every short sleep (as before when set), 0 yielding for every one; not set: by
+   the processors. HOS_SHORT_SLEEP_POLLERS=0: no limit */
+static int short_sleep_choice(void) {
+    static int choice = -1;   /* (how | the cap << 2: one atomic word) */
+    int c = __atomic_load_n(&choice, __ATOMIC_RELAXED);
+    if (c >= 0) return c;
+    const int threads = process_threads();
+    const char *asked = getenv("HOS_SHORT_SLEEP_TIMER");
+    int how;   /* 0: all yield, 1: the game's on the timer, 2: all on the timer */
+    if (asked) {
+        char v[8] = {0};
+        for (int i = 0; i < 7 && asked[i]; i++) v[i] = (char)(asked[i] | 0x20);
+        how = (!*asked || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "off") || !strcmp(v, "no")) ? 0 : 2;
+    }
+    else how = threads > 0 && threads <= SHORT_SLEEP_TIMER_THREADS ? 1 : 0;
+    int cap = 0;
+    if (!how && !asked) {
+        const char *p = getenv("HOS_SHORT_SLEEP_POLLERS");
+        char *end = NULL;
+        const long n = p && *p ? strtol(p, &end, 10) : 0;
+        if (end && end != p && *end == 0) cap = n > 0 ? (int)(n < 1024 ? n : 1024) : 0;
+        else cap = threads > SHORT_SLEEP_TIMER_THREADS ? threads / 4 : 0;
+    }
+    if (how) hos_log("sleep: %s sleeps under a millisecond wait on the timer (%d logical processors; HOS_SHORT_SLEEP_TIMER=0: all yield)",
+                     how == 2 ? "all" : "the game's", threads);
+    if (cap) hos_log("sleep: at most %d of the game's threads yield through a short sleep at a time, the others wait on the "
+                     "timer (%d logical processors; HOS_SHORT_SLEEP_POLLERS=0: all yield)", cap, threads);
+    c = how | cap << 2;
+    __atomic_store_n(&choice, c, __ATOMIC_RELAXED);
+    return c;
+}
+static volatile LONG short_pollers;   /* (the game's threads in the yield loop now) */
 /* (relink) HOS_YIELD_MODE (experiment): what a guest thread's spin-wait does to let others run. 0: SwitchToThread, which
    hands the processor to ANY ready thread on it, of a lower priority too (another app's, a background service's) for the
    rest of a time slice; 1: Sleep(0), which yields only to threads of the same or a higher priority (the game's own: the
@@ -791,8 +885,15 @@ static void sleep_ns(int64_t ns) {
 #endif
     /* Under a millisecond: yielded away until the time (the timer's ~0.5 ms granularity made TOTK's 20 us waits for
        its job workers 25x longer, ~2000 a second on the frame's critical path). HOS_SHORT_SLEEP_TIMER=1: as before */
-    static int short_timer = -1;
-    if (short_timer < 0) short_timer = getenv("HOS_SHORT_SLEEP_TIMER") != NULL;
+    const int chosen = short_sleep_choice(), how = chosen & 3, poll_cap = chosen >> 2;
+    const int short_timer = how >= (guest_sleep ? 1 : 2);
+    /* (a counted poller: the game's, not a serial thread's, with a cap) */
+    const int counted = guest_sleep && poll_cap && !hos_thread_serial(cur);
+    int polling = 0;
+    if (ns < 1000000 && !short_timer && counted) {
+        if (InterlockedIncrement(&short_pollers) <= poll_cap) polling = 1;
+        else InterlockedDecrement(&short_pollers);
+    }
     /* (relink, HOS_SLEEP_PAUSES=<n>, experiment; 0: as before) n pauses between two looks at the clock when no other thread
        wanted the processor. OoT's job system waits for its workers in 20 us sleeps (~350 a frame in the Kokiri village,
        ~1.15 logical processor spent in this loop while the frame's commands are generated, hs801 / hs840): one pause a
@@ -813,19 +914,21 @@ static void sleep_ns(int64_t ns) {
         if (v > 4096) v = 4096;
         __atomic_store_n(&short_sleep_pause, v, __ATOMIC_RELAXED);
     }
-    if (ns < 1000000 && !short_timer) {
+    if (ns < 1000000 && !short_timer && (!counted || polling)) {
         const int sp = __atomic_load_n(&short_sleep_pause, __ATOMIC_RELAXED);
         if (sp > 0) {
             yield_cpu();
             while (hos_now_ns() < until) {
                 for (int i = 0; i < sp; i++) YieldProcessor();
             }
+            if (polling) InterlockedDecrement(&short_pollers);
             return;
         }
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
         if (sp < 0) {
             struct timespec ts = {0, (long)ns};
             nanosleep(&ts, NULL);
+            if (polling) InterlockedDecrement(&short_pollers);
             return;
         }
 #endif
@@ -834,6 +937,7 @@ static void sleep_ns(int64_t ns) {
                 YieldProcessor();
                 for (int i = 1; i < pauses; i++) YieldProcessor();
             }
+        if (polling) InterlockedDecrement(&short_pollers);
         return;
     }
     if (!tried) {
@@ -854,6 +958,9 @@ static void sleep_ns(int64_t ns) {
 
 /* ---- nn::os threads -------------------------------------------------------------------------------------- */
 static HosThread *thread_arg(Ctx *c, uint64_t tt) {
+    /* (ReLink-R 0.0.5, from Hookshot #2708) the calling thread's own ThreadType, the usual case (GetThreadPriority(
+       GetCurrentThread()) ~2,400 times a frame in Hyrule): its record, without the scan of every thread under the lock */
+    if (tt && cur && cur->guest_tt == tt) return cur;
     HosThread *t = hos_thread_of(tt);
     if (!t) hos_fatal(c, "unknown nn::os::ThreadType %#llx", (unsigned long long)tt);
     return t;
@@ -940,9 +1047,11 @@ void hos_sleep_logged(int64_t ns, uint64_t lr) {
     if (poll_cap && ns > poll_cap && ns <= 100000) ns = poll_cap;
     static int on = -1;
     if (on < 0) on = getenv("HOS_SLEEP_LOG") != NULL;
-    if (!on) { hos_sleep_ns(ns); return; }
+    guest_sleep = 1;   /* (ReLink-R 0.0.5: the game's own sleep, for sleep_ns's choice) */
+    if (!on) { hos_sleep_ns(ns); guest_sleep = 0; return; }
     const int64_t t0 = hos_now_ns();
     hos_sleep_ns(ns);
+    guest_sleep = 0;
     const int64_t took = hos_now_ns() - t0;
     static SRWLOCK lk = SRWLOCK_INIT;
     static struct { uint64_t lr; int64_t n, asked, slept; } tab[64];
@@ -1373,7 +1482,9 @@ static void vc_take(HosThread *t, int c) {
 static void vc_dequeue(HosThread *t) {
     for (int i = 0; i < vc_nq; i++)
         if (vc_queue[i] == t) {
-            vc_queue[i] = vc_queue[--vc_nq];
+            const int last = vc_nq - 1;
+            vc_queue[i] = vc_queue[last];
+            __atomic_store_n(&vc_nq, last, __ATOMIC_RELEASE);   /* (read without vc_lock by vc_yield's fast path) */
             break;
         }
     t->vc_queued = 0;
@@ -1461,7 +1572,10 @@ static void vc_acquire(HosThread *t) {
     const int64_t t0 = hos_now_ns();
     t->vc_since = t0;
     t->vc_queued = 1;
-    if (vc_nq < 1024) vc_queue[vc_nq++] = t;
+    if (vc_nq < 1024) {
+        vc_queue[vc_nq] = t;
+        __atomic_store_n(&vc_nq, vc_nq + 1, __ATOMIC_RELEASE);   /* (read without vc_lock by vc_yield's fast path) */
+    }
     vc_st.waits++;
     for (;;) {
         /* the worst holder worse than t on a core t may use gives it up at its next checkpoint; after
@@ -1552,8 +1666,23 @@ static void vc_release(HosThread *t) {
     ReleaseSRWLockExclusive(&vc_lock);
 }
 /* gives the core to a waiter allowed on it that is better than t (strict) or as good (a yield) */
+/* (ReLink-R 0.0.5, from Longshot #1553 via HeyListen) HOS_VC_YIELD_FAST=0: a yield always takes vc_lock, as before. By
+   default a thread that holds a core with nobody queued and no kick pending returns without the lock (the game's polled
+   loops yield thousands of times a frame): a waiter that comes later asks for a checkpoint itself (vc_acquire), and a
+   kick left over goes through the lock below, which clears it */
+static int vc_yield_fast(void) {
+    static int v = -1;
+    int on = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (on < 0) {
+        const char *e = getenv("HOS_VC_YIELD_FAST");
+        on = !(e && !strcmp(e, "0"));
+        __atomic_store_n(&v, on, __ATOMIC_RELAXED);
+    }
+    return on;
+}
 static void vc_yield(HosThread *t, int strict) {
     if (!t->vc_held) return;
+    if (vc_yield_fast() && !__atomic_load_n(&vc_nq, __ATOMIC_ACQUIRE) && !__atomic_load_n(&t->vc_kick, __ATOMIC_RELAXED)) return;
     AcquireSRWLockExclusive(&vc_lock);
     const int c = t->vc_held - 1;
     int any = 0;

@@ -1,0 +1,51 @@
+/* (ReLink-R 0.0.5, from Longshot c88f70440 by SadTransGirl, #1814, as HeyListen ported it) The neighbouring map the
+   OptimizeChangeBank thread preloads, kept while the game's choice only flickers: the lifted f_832b9880 hands its choice to
+   hos_oot_ocb_pick before it asks for the unit and lets the others go (nx2/oot_patches.py patch_ocb_hold). In Castle Town's
+   market Link stands inside the load radius of two neighbouring maps, and the game's preload manager flipped its choice
+   between them as he turned: each flip cancelled the map loading and loaded the other from the start. host/oot_ocb_hold.h
+   has the rule.
+   HOS_OCB_HOLD_MS=<ms>: a new choice is taken once it has stayed the choice that long (2000 with no switch); 0 or off: the
+   game's own choice at every frame. */
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include "hos.h"
+#include "oot_ocb_hold.h"
+#include <stdlib.h>
+
+#define OCB_HOLD_DEFAULT_MS 2000
+
+static OotOcbHold hold = OOT_OCB_HOLD_INIT;
+static SRWLOCK hold_lock = SRWLOCK_INIT;   /* (one manager, updated once a frame; this does not rely on it) */
+static int64_t hold_ns = -1;               /* (read once, under hold_lock) */
+static long long calls, held_back, taken;  /* (under hold_lock: the log's counts) */
+
+static uint64_t guest_load(void *ctx, uint64_t addr, int size) {
+    Ctx *c = (Ctx *)ctx;
+    return size == 1 ? recomp_load8(c, addr) : size == 4 ? recomp_load32(c, addr) : recomp_load64(c, addr);
+}
+
+/* chosen: the update's unit (x21, its low 32 bits; 0xffffffff none); mgr: the manager (x19). The unit it goes on with */
+uint64_t hos_oot_ocb_pick(Ctx *c, uint64_t mgr, uint64_t chosen) {
+    const int want = (int)(uint32_t)chosen;
+    AcquireSRWLockExclusive(&hold_lock);
+    if (hold_ns < 0) {
+        hold_ns = oot_ocb_hold_ms(getenv("HOS_OCB_HOLD_MS"), OCB_HOLD_DEFAULT_MS) * 1000000;
+        if (hold_ns > 0)
+            hos_log("ocb: a new neighbour to preload is taken once it stays the choice %lld ms (HOS_OCB_HOLD_MS; 0: the "
+                    "game's own at every frame)", (long long)(hold_ns / 1000000));
+    }
+    int out = want;
+    if (hold_ns > 0) {
+        const int held = oot_ocb_held(guest_load, c, mgr), before = hold.cand;
+        out = oot_ocb_pick(&hold, want, held, hold_ns, hos_now_ns());
+        calls++;
+        if (held >= 0 && want != held) {
+            if (out == want) taken++;                     /* (stayed the choice long enough: the game's change) */
+            else if (hold.cand != before) held_back++;    /* (a new other choice, held back) */
+        }
+        if (calls % 18000 == 0)
+            hos_log("ocb: %lld choices of another neighbour held back, %lld taken, in %lld updates", held_back, taken, calls);
+    }
+    ReleaseSRWLockExclusive(&hold_lock);
+    return (uint64_t)(uint32_t)out;
+}

@@ -5,6 +5,12 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.5-dev**: less wasted work, from the Hookshot family. Fewer idle game threads spin while they wait (Hookshot #2263,
+  #2709: on PCs with 6 threads or fewer the game's short sleeps use the timer); a signal with no waiter returns at once
+  (Hookshot #2708); events are one atomic word and an uncontended yield takes no lock (Longshot #1553); Castle Town's market
+  no longer reloads a neighbouring map each time Link turns (Longshot c88f70440, `HOS_OCB_HOLD_MS`); a pool import no longer
+  stalls 15-29 ms when something first comes into view (Hookshot #3043, `RX_VK_IMPORT_FENCE`). The game's runtime is
+  compile-checked for Windows on every change.
 - **0.0.4-dev** (on top of upstream 0.7.9.3): everything upstream 0.7.9.3 brings, among it frame pacing on by default (the
   game's frames shown evenly, no frame generation), faster locks between the game's threads, the detailed FPS counter, FSR 4
   and DLSS/DLAA/FSR's own Sharpness; ReLink-R keeps its one look (upstream's light/dark rows are not shown). ReLink-R is always
