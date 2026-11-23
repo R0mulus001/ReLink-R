@@ -1482,7 +1482,9 @@ static void vc_take(HosThread *t, int c) {
 static void vc_dequeue(HosThread *t) {
     for (int i = 0; i < vc_nq; i++)
         if (vc_queue[i] == t) {
-            vc_queue[i] = vc_queue[--vc_nq];
+            const int last = vc_nq - 1;
+            vc_queue[i] = vc_queue[last];
+            __atomic_store_n(&vc_nq, last, __ATOMIC_RELEASE);   /* (read without vc_lock by vc_yield's fast path) */
             break;
         }
     t->vc_queued = 0;
@@ -1570,7 +1572,10 @@ static void vc_acquire(HosThread *t) {
     const int64_t t0 = hos_now_ns();
     t->vc_since = t0;
     t->vc_queued = 1;
-    if (vc_nq < 1024) vc_queue[vc_nq++] = t;
+    if (vc_nq < 1024) {
+        vc_queue[vc_nq] = t;
+        __atomic_store_n(&vc_nq, vc_nq + 1, __ATOMIC_RELEASE);   /* (read without vc_lock by vc_yield's fast path) */
+    }
     vc_st.waits++;
     for (;;) {
         /* the worst holder worse than t on a core t may use gives it up at its next checkpoint; after
@@ -1661,8 +1666,23 @@ static void vc_release(HosThread *t) {
     ReleaseSRWLockExclusive(&vc_lock);
 }
 /* gives the core to a waiter allowed on it that is better than t (strict) or as good (a yield) */
+/* (ReLink-R 0.0.5, from Longshot #1553 via HeyListen) HOS_VC_YIELD_FAST=0: a yield always takes vc_lock, as before. By
+   default a thread that holds a core with nobody queued and no kick pending returns without the lock (the game's polled
+   loops yield thousands of times a frame): a waiter that comes later asks for a checkpoint itself (vc_acquire), and a
+   kick left over goes through the lock below, which clears it */
+static int vc_yield_fast(void) {
+    static int v = -1;
+    int on = __atomic_load_n(&v, __ATOMIC_RELAXED);
+    if (on < 0) {
+        const char *e = getenv("HOS_VC_YIELD_FAST");
+        on = !(e && !strcmp(e, "0"));
+        __atomic_store_n(&v, on, __ATOMIC_RELAXED);
+    }
+    return on;
+}
 static void vc_yield(HosThread *t, int strict) {
     if (!t->vc_held) return;
+    if (vc_yield_fast() && !__atomic_load_n(&vc_nq, __ATOMIC_ACQUIRE) && !__atomic_load_n(&t->vc_kick, __ATOMIC_RELAXED)) return;
     AcquireSRWLockExclusive(&vc_lock);
     const int c = t->vc_held - 1;
     int any = 0;
