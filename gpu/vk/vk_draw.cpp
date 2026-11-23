@@ -4348,6 +4348,53 @@ bool targets_persistent(const Targets& at) {
     return at.depth && at.depth->first_render_frame && at.depth->first_render_frame < now;
 }
 
+// (ReLink-R 0.0.6, from Hookshot #2559, RX_VK_GAME_ORDER) Every draw pass began with a full barrier: the GPU emptied itself
+// before each pass, about 150 times a frame in the Market. A pass right after another one, on the same command buffer with nothing
+// recorded between (no copy, clear, fill, upload, dump nor the game's own barrier: each counts in thread_work, vk_work.h), waits only
+// in its fragment stages for what the passes before wrote; its vertex work starts at once. The game orders the rest itself: it
+// records nvnCommandBufferBarrier wherever a pass samples what an earlier one drew, and the replay keeps that one a full barrier
+// (vk_replay.cpp NOP_BARRIER). Still a full barrier: anything recorded since the last pass's end, a new recording, a parallel
+// replay, a pass with stand-in targets (its copies come before it). Hookshot measured 2.3 ms of a 9.7 ms GPU frame. On NVIDIA by
+// default (the game's barriers were placed for an NVIDIA GPU), off on other vendors, where it has not run: RX_VK_GAME_ORDER=1 there
+// to try it, 0 to turn it off everywhere.
+namespace {
+thread_local VkCommandBuffer pass_end_cmd = VK_NULL_HANDLE;   // (this thread's last pass end, and its work count right after it)
+thread_local uint64_t pass_end_work = 0;
+std::atomic<int64_t> st_pass_relaxed{0}, st_pass_full{0};
+bool game_order() {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_GAME_ORDER");
+        const bool v = e && *e ? atoi(e) != 0 : dev.props.vendorID == 0x10DE;
+        logf("vk: a draw pass right after another waits in its fragment stages only: %s (RX_VK_GAME_ORDER%s)", v ? "on" : "off",
+             e && *e ? " set" : v ? "=0 turns it off" : "=1 turns it on");
+        return v;
+    }();
+    return on;
+}
+void pass_start_barrier(VkCommandBuffer cmd, bool stand_in) {
+    if (stand_in || !game_order() || par_active.load(std::memory_order_relaxed) || cmd != pass_end_cmd ||
+        thread_work != pass_end_work) {
+        st_pass_full.fetch_add(1, std::memory_order_relaxed);
+        full_barrier(cmd, "barrier (pass start)");
+        return;
+    }
+    st_pass_relaxed.fetch_add(1, std::memory_order_relaxed);
+    VkMemoryBarrier2 b{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    d.memoryBarrierCount = 1;
+    d.pMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &d);   // (counts as work: the next full barrier is not left out after this one)
+}
+} // namespace
+/// (ReLink-R 0.0.6, RX_VK_GAME_ORDER) pass-start barriers so far: fragment-only, full
+void pass_barrier_stats(int64_t* relaxed, int64_t* full) {
+    *relaxed = st_pass_relaxed.load(std::memory_order_relaxed), *full = st_pass_full.load(std::memory_order_relaxed);
+}
 void begin_pass(VkCommandBuffer cmd, const Targets& at) {
     Pass& ps = pass();   // One TLS accessor for this recording thread's pass state.
     bool same = ps.open && ps.depth == at.depth_view && ps.n == at.n && ps.width == at.width &&
@@ -4355,7 +4402,7 @@ void begin_pass(VkCommandBuffer cmd, const Targets& at) {
     for (int i = 0; i < at.n && same; i++) same = ps.color[i] == at.color_view[i];
     if (same) return;
     end_pass(cmd);
-    full_barrier(cmd, "barrier (pass start)");   // (what the pass before wrote, and the transfers before it)
+    pass_start_barrier(cmd, at.stand_in != 0);   // (what the pass before wrote, and the transfers before it)
     work_since_barrier = true;
     if (at.stand_in) {   // (relink, issue 21) what the compressed targets hold, into the images that stand in for them
         for (int i = 0; i < at.n; i++)
@@ -5104,6 +5151,7 @@ void draw_begin_recording(int slot, VkCommandBuffer cmd, uint64_t value) {
     cur = &r;
     pass() = Pass{};
     work_since_barrier = false;
+    pass_end_cmd = VK_NULL_HANDLE;   // (ReLink-R 0.0.6: a new recording's first pass starts with a full barrier, whatever its handle held)
     last_dyn_valid = false, last_desc_valid = false, last_vb_valid = false, last_pipeline = VK_NULL_HANDLE;
     vertex_set.on = false, last_ib.on = false;
     descriptors_disturbed();
@@ -5355,6 +5403,7 @@ void end_pass(VkCommandBuffer cmd) {
     Pass& ps = pass();   // One TLS accessor for this recording thread's pass state.
     if (!ps.open) return;
     vkCmdEndRendering(cmd);
+    pass_end_cmd = cmd, pass_end_work = thread_work;   // (ReLink-R 0.0.6, RX_VK_GAME_ORDER: pass_start_barrier)
     ps.open = false;
     if (ps.stand_in) {   // (relink, issue 21) what the pass rendered into stand-ins, back into the compressed targets
         full_barrier(cmd, "barrier (stand-in out)");

@@ -3483,6 +3483,14 @@ void log_frame_stats() {
                      (kp - l_kp) / 120.0, (sk - l_sk) / 120.0);
                 l_sk = sk, l_kp = kp;
             }
+            {   // (ReLink-R 0.0.6, RX_VK_GAME_ORDER: a pass right after another waits in its fragment stages only)
+                static int64_t l_rx, l_fu;
+                int64_t rx = 0, fu = 0;
+                pass_barrier_stats(&rx, &fu);
+                logf("vk: a frame: pass-start barriers %.1f full, %.1f fragment stages only (right after another pass)", (fu - l_fu) / 120.0,
+                     (rx - l_rx) / 120.0);
+                l_rx = rx, l_fu = fu;
+            }
             std::string fl;   // (NVN's barrier bits: ORDER_PRIMITIVES 1, ORDER_FRAGMENTS 2, ORDER_FRAGMENTS_TILED 4, ORDER_INDIRECT_DATA 8, INVALIDATE_TEXTURE 0x10, _SHADER 0x20, _TEXTURE_DESCRIPTOR 0x40, _ZCULL 0x80)
             std::lock_guard lk(st_barrier_flags_mu);
             for (const auto& [bits, n] : st_barrier_flags) {
