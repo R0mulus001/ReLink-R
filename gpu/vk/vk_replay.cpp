@@ -1218,8 +1218,8 @@ void mesh_conv_at_barrier(VkCommandBuffer cmd, const uint8_t* next, const uint8_
     if (!mesh_conv_batching()) return mesh_conv_batch(cmd, nullptr, 0);
     // (ops that record no GPU write to buffer memory in stream order: state, binds, draws (one whose program writes memory drops the
     // batch as it is drawn: vk_draw.cpp), attachment clears, uniform updates (written to memory at the recording's end), counters'
-    // resets, render conditions. Not NOP_JUMP nor NOP_CALL: the stream goes on elsewhere, so the scan stops there)
-    static const uint32_t pass_ops[] = {NOP_BEGIN, NOP_UPDATE_UB, NOP_SET_RT, NOP_CLEAR_COLOR, NOP_CLEAR_DS, NOP_VIEWPORTS, NOP_SCISSOR,
+    // resets, render conditions; NOP_JUMP and NOP_CALL, which the replay passes over: its stream is laid out in order)
+    static const uint32_t pass_ops[] = {NOP_BEGIN, NOP_JUMP, NOP_CALL, NOP_UPDATE_UB, NOP_SET_RT, NOP_CLEAR_COLOR, NOP_CLEAR_DS, NOP_VIEWPORTS, NOP_SCISSOR,
                                         NOP_DEPTH_RANGE, NOP_BIND_PROGRAM, NOP_BIND_STATE, NOP_BIND_VATTR, NOP_BIND_VSTREAM,
                                         NOP_BIND_VBUF, NOP_BIND_UBO, NOP_BIND_SSBO, NOP_BIND_TEX, NOP_BIND_SAMP, NOP_STENCIL,
                                         NOP_POLY_OFFSET, NOP_DRAW, NOP_DRAW_IDX, NOP_SET_TEX_POOL, NOP_SET_SAMP_POOL, NOP_COPY_STRIDE,
