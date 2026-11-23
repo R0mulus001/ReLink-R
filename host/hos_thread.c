@@ -958,6 +958,9 @@ static void sleep_ns(int64_t ns) {
 
 /* ---- nn::os threads -------------------------------------------------------------------------------------- */
 static HosThread *thread_arg(Ctx *c, uint64_t tt) {
+    /* (ReLink-R 0.0.5, from Hookshot #2708) the calling thread's own ThreadType, the usual case (GetThreadPriority(
+       GetCurrentThread()) ~2,400 times a frame in Hyrule): its record, without the scan of every thread under the lock */
+    if (tt && cur && cur->guest_tt == tt) return cur;
     HosThread *t = hos_thread_of(tt);
     if (!t) hos_fatal(c, "unknown nn::os::ThreadType %#llx", (unsigned long long)tt);
     return t;
