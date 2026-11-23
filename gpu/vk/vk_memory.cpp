@@ -29,6 +29,7 @@
 #include "vk_texture.h"   // (upload_command_buffer)
 #include "vk_gprof.h"      // (RX_VK_PASS_TIMING)
 #include "import_hold.h"
+#include "import_fence.h"   // (ReLink-R 0.0.5, from Hookshot #3043)
 #include "mirror_inherit.h"
 #include "mirror_trim.h"
 #ifdef __linux__
@@ -431,7 +432,18 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     ai.pNext = &im;
     ai.allocationSize = bytes;
     ai.memoryTypeIndex = type;
-    const VkResult allocated = vkAllocateMemory(dev.device, &ai, nullptr, &p.memory);
+    // (ReLink-R 0.0.5, from Hookshot #3043, import_fence.h) the driver's question about the pointer walks the heap from here
+    // to the end of its run of read-write pages (15-29 ms an import in play, one stalled frame each when something first
+    // comes into view): the page after the range ends the run while it is asked. RX_VK_IMPORT_FENCE=0 (or off): as before
+    static const bool fence_on = [] {
+        const char* v = getenv("RX_VK_IMPORT_FENCE");
+        return !v || !(!*v || !strcmp(v, "0") || !strcmp(v, "off") || !strcmp(v, "false") || !strcmp(v, "no"));
+    }();
+    VkResult allocated;
+    {
+        const ImportFence fence(ptr, bytes, fence_on);
+        allocated = vkAllocateMemory(dev.device, &ai, nullptr, &p.memory);
+    }
     if (allocated != VK_SUCCESS && getenv("RX_VK_IMPORT_DIAG")) {
         // (diagnostics, RX_VK_IMPORT_DIAG=1: every refused import, with what overlaps it and the pages' Windows state)
         size_t live_over = 0;
