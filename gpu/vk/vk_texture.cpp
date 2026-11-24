@@ -3025,6 +3025,64 @@ void barrier_stats(int64_t* made, int64_t* left_out) {
     *made = st_barriers_made.load(std::memory_order_relaxed), *left_out = st_barriers_left_out.load(std::memory_order_relaxed);
 }
 
+// (ReLink-R 0.0.7) Why the full barriers were recorded: a count by reason (the why of full_barrier, a string literal: counted by its
+// address), logged with the frame counters every 120 presents. The Market recorded 500-580 full barriers a frame on 0.0.6, of which
+// the game's own nvnCommandBufferBarrier were ~125: this says where the rest come from. Off unless RX_VK_BARRIER_WHY=1 or
+// RX_VK_PASS_TIMING is on: one check of a cached flag a barrier when off.
+namespace {
+constexpr int kWhy = 96;
+struct WhyCount {
+    std::atomic<const char*> why{nullptr};
+    std::atomic<int64_t> n{0};
+};
+WhyCount why_counts[kWhy];
+std::atomic<int64_t> why_other{0};
+bool why_on() {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_BARRIER_WHY");
+        return (e && atoi(e) != 0) || gprof_on();
+    }();
+    return on;
+}
+void why_count(const char* why) {
+    if (!why) why = "barrier (other)";
+    for (WhyCount& w : why_counts) {
+        const char* cur = w.why.load(std::memory_order_acquire);
+        if (!cur) {
+            const char* expected = nullptr;
+            if (w.why.compare_exchange_strong(expected, why, std::memory_order_acq_rel)) cur = why;
+            else cur = expected;
+        }
+        if (cur == why) {
+            w.n.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    why_other.fetch_add(1, std::memory_order_relaxed);
+}
+} // namespace
+std::string barrier_why_report(int frames) {
+    if (!why_on() || frames <= 0) return {};
+    std::vector<std::pair<int64_t, const char*>> v;
+    for (WhyCount& w : why_counts) {
+        const char* why = w.why.load(std::memory_order_acquire);
+        const int64_t n = w.n.exchange(0, std::memory_order_relaxed);
+        if (why && n) v.push_back({n, why});
+    }
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::string out;
+    char b[160];
+    for (const auto& [n, why] : v) {
+        snprintf(b, sizeof b, " %.1f %s;", (double)n / frames, why);
+        out += b;
+    }
+    if (const int64_t o = why_other.exchange(0, std::memory_order_relaxed)) {
+        snprintf(b, sizeof b, " %.1f (reasons past the table);", (double)o / frames);
+        out += b;
+    }
+    return out;
+}
+
 // (relink) A full barrier right after another one on the same command buffer, no command that does or orders GPU work in between
 // (vk_work.h counts them), orders nothing the first did not: left out. The game's own barrier (end of a pass), then the next pass's
 // start barrier, then a dispatch's, were two or three in a row. RX_VK_BARRIER_DEDUPE_OFF=1: all recorded, as before.
@@ -3036,6 +3094,7 @@ void full_barrier(VkCommandBuffer cmd, const char* why) {
         return;
     }
     st_barriers_made.fetch_add(1, std::memory_order_relaxed);
+    if (why_on()) why_count(why);   // (ReLink-R 0.0.7, RX_VK_BARRIER_WHY)
     GprofSpan gp(cmd, why);   // (RX_VK_PASS_TIMING: what a barrier costs the GPU that has nothing left to wait for)
     VkMemoryBarrier2 b{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
     b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;

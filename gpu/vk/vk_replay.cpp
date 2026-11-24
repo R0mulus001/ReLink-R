@@ -1719,7 +1719,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
                 st_barrier_flags[bits]++;
             }
             end_pass(cmd);
-            full_barrier(cmd, "barrier (the game's nvnCommandBufferBarrier)");
+            game_barrier(cmd, payload<int32_t>(a, avail));   // (ReLink-R 0.0.7, RX_VK_GAME_BARRIERS: as strong as its flags ask)
             mesh_conv_at_barrier(cmd, p + h.size, end);   // (ReLink-R 0.0.6, RX_VK_MESH_CONV=2)
             st_barriers++;
             break;
@@ -3542,6 +3542,17 @@ void log_frame_stats() {
                 logf("vk: a frame: pass-start barriers %.1f full, %.1f fragment stages only (right after another pass)", (fu - l_fu) / 120.0,
                      (rx - l_rx) / 120.0);
                 l_rx = rx, l_fu = fu;
+            }
+            {   // (ReLink-R 0.0.7, RX_VK_GAME_BARRIERS and RX_VK_BARRIER_WHY)
+                static int64_t l_gb[4];
+                int64_t gb[4];
+                game_barrier_stats(gb);
+                logf("vk: a frame: the game's barriers: %.1f fragment stages only, %.1f full for their flags, %.1f full for work since the "
+                     "pass; %.1f pass-start barriers left out after them (RX_VK_GAME_BARRIERS)", (gb[0] - l_gb[0]) / 120.0,
+                     (gb[1] - l_gb[1]) / 120.0, (gb[2] - l_gb[2]) / 120.0, (gb[3] - l_gb[3]) / 120.0);
+                for (int i = 0; i < 4; i++) l_gb[i] = gb[i];
+                const std::string why = barrier_why_report(120);
+                if (!why.empty()) logf("vk: a frame: full barriers by reason (RX_VK_BARRIER_WHY):%s", why.c_str());
             }
             std::string fl;   // (NVN's barrier bits: ORDER_PRIMITIVES 1, ORDER_FRAGMENTS 2, ORDER_FRAGMENTS_TILED 4, ORDER_INDIRECT_DATA 8, INVALIDATE_TEXTURE 0x10, _SHADER 0x20, _TEXTURE_DESCRIPTOR 0x40, _ZCULL 0x80)
             std::lock_guard lk(st_barrier_flags_mu);

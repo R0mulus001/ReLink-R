@@ -5,6 +5,11 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.7-dev**: the game's own GPU barriers only as strong as their flags ask. The ~70 a Market frame that only order the
+  pixels of one pass before the next (ORDER_FRAGMENTS + INVALIDATE_TEXTURE) let the next pass's vertex work start while the last
+  one finishes, and the next pass adds no full stop of its own after them; every other kind, and any barrier with ReLink's own
+  copies or syncs before it, stays a full stop (NVIDIA by default, `RX_VK_GAME_BARRIERS=0` for the old behaviour). The log counts
+  every full stop by its reason (`RX_VK_BARRIER_WHY=1`, also on with `RX_VK_PASS_TIMING=1`).
 - **0.0.6-dev**: a lighter graphics-card frame, from the Hookshot family. A draw pass right after another no longer makes the GPU
   empty itself first: it waits only in its fragment stages, the game's own barriers order the rest (Hookshot #2559, NVIDIA by
   default, `RX_VK_GAME_ORDER`); the 1,300-2,600 small copies a frame that bring the CPU's pages into the GPU's mirrors go as one

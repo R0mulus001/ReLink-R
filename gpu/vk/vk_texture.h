@@ -221,6 +221,14 @@ void full_barrier(VkCommandBuffer cmd, const char* why = "barrier (other)");
 void barrier_stats(int64_t* made, int64_t* left_out);
 void dispatch_hazard_stats(int64_t* skipped, int64_t* kept);   // (vk_draw.cpp, ReLink-R 0.0.4: RX_VK_DISPATCH_HAZARDS)
 void pass_barrier_stats(int64_t* relaxed, int64_t* full);   // (vk_draw.cpp, ReLink-R 0.0.6: RX_VK_GAME_ORDER)
+/// (vk_texture.cpp, ReLink-R 0.0.7: RX_VK_BARRIER_WHY=1 or RX_VK_PASS_TIMING) the full barriers by reason since the last call, a frame
+/// (" n reason;" each, most first; empty when off)
+std::string barrier_why_report(int frames);
+/// (vk_draw.cpp, ReLink-R 0.0.7: RX_VK_GAME_BARRIERS) the game's nvnCommandBufferBarrier (bits: its NVN flags), the pass ended before
+void game_barrier(VkCommandBuffer cmd, int32_t bits);
+/// (vk_draw.cpp) game_barrier's counts: [0] narrowed to the fragment stages, [1] full for their bits, [2] full for work recorded since
+/// the pass before, [3] pass-start barriers left out after a narrowed one
+void game_barrier_stats(int64_t out[4]);
 void texture_stats(int64_t* uploads, int64_t* astc_gpu, int64_t* bytes_uploaded);
 /// RX_VK_DUMP_TEX: the textures uploaded next written to that folder as PPM (diagnostics)
 void texture_read_texels(const nvn_tex* t, unsigned level, unsigned layer0, const NVNcopyRegion* r, uint8_t* dst,
