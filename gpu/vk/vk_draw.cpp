@@ -4376,7 +4376,71 @@ bool game_order() {
     }();
     return on;
 }
+// (ReLink-R 0.0.7, RX_VK_GAME_BARRIERS) The game's own barrier, as strong as its NVN flags ask. Every nvnCommandBufferBarrier was a
+// full barrier (all commands before it, done and written, before any stage of any command after it starts): ~125 a frame in the
+// Market. ~70 of them are 0x12 (ORDER_FRAGMENTS | INVALIDATE_TEXTURE): "the fragments before are done and what they wrote can be
+// sampled before the fragments after start", which lets the next pass's vertex work run while the last one finishes. Such a barrier
+// (ORDER_FRAGMENTS or ORDER_FRAGMENTS_TILED, with nothing beside them but INVALIDATE_TEXTURE) waits now in the next commands'
+// fragment stages only: its first half is still all commands before it and all their writes (a barrier's first half takes in
+// everything recorded before it, whatever barriers came between), so only what runs after it outside the fragment stages may start
+// sooner. Full as before: any other flags (ORDER_PRIMITIVES, ORDER_INDIRECT_DATA, shader / descriptor / zcull invalidates), work of
+// the replay's own recorded since the pass before it ended (copies, syncs, uploads, dispatches, fills: each counts in thread_work,
+// vk_work.h), no pass ended on this command buffer, a parallel replay, and GPUs other than NVIDIA's (the game's barriers were placed
+// for one). The next pass's start barrier is left out after it when nothing was recorded between them: the game's barrier ordered
+// that pass already. Commands of the replay's own after it record their own full barriers, as before (a narrowed barrier is not a
+// full one to the dedupe in full_barrier). RX_VK_GAME_BARRIERS=0: all full barriers, as 0.0.6; =1: on any GPU. Credit: the idea of
+// honouring the flags is NVN's own (nvnCommandBufferBarrier's documented meaning); Hookshot #2559 measured the gain of letting a
+// pass's vertex work start early (2.3 ms of a 9.7 ms GPU frame) on pass starts, which this extends to the game's barriers.
+thread_local VkCommandBuffer gb_cmd = VK_NULL_HANDLE;   // (this thread's last narrowed game barrier, and its work count right after it)
+thread_local uint64_t gb_work = 0;
+std::atomic<int64_t> st_gb[4];
+bool game_barriers_on() {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_GAME_BARRIERS");
+        const bool v = e && *e ? atoi(e) != 0 : dev.props.vendorID == 0x10DE;
+        logf("vk: the game's barriers as strong as their flags ask (fragment ordering waits in the fragment stages only): %s "
+             "(RX_VK_GAME_BARRIERS%s)", v ? "on" : "off", e && *e ? " set" : v ? "=0 turns it off" : "=1 turns it on");
+        return v;
+    }();
+    return on;
+}
+bool fragments_only(int32_t bits) {
+    const uint32_t b = (uint32_t)bits;
+    constexpr uint32_t kOrderFrag = 0x2 | 0x4, kInvTex = 0x10;
+    return (b & kOrderFrag) && !(b & ~(kOrderFrag | kInvTex));
+}
+} // namespace
+void game_barrier_rec(VkCommandBuffer cmd, int32_t bits) {
+    if (!game_barriers_on() || !fragments_only(bits) || par_active.load(std::memory_order_relaxed)) {
+        st_gb[1].fetch_add(1, std::memory_order_relaxed);
+        full_barrier(cmd, "barrier (the game's nvnCommandBufferBarrier)");
+        return;
+    }
+    if (cmd != pass_end_cmd || thread_work != pass_end_work) {
+        st_gb[2].fetch_add(1, std::memory_order_relaxed);
+        full_barrier(cmd, "barrier (the game's nvnCommandBufferBarrier, work since the pass)");
+        return;
+    }
+    st_gb[0].fetch_add(1, std::memory_order_relaxed);
+    GprofSpan gp(cmd, "barrier (the game's nvnCommandBufferBarrier, fragment stages only)");
+    VkMemoryBarrier2 b{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    b.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    b.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                     VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    d.memoryBarrierCount = 1;
+    d.pMemoryBarriers = &b;
+    vkCmdPipelineBarrier2(cmd, &d);   // (counts as work: a full barrier after it is recorded, not left out)
+    gb_cmd = cmd, gb_work = thread_work;
+}
+namespace {
 void pass_start_barrier(VkCommandBuffer cmd, bool stand_in) {
+    if (!stand_in && cmd == gb_cmd && thread_work == gb_work && !par_active.load(std::memory_order_relaxed)) {
+        st_gb[3].fetch_add(1, std::memory_order_relaxed);   // (RX_VK_GAME_BARRIERS: the game's barrier right before ordered this pass)
+        return;
+    }
     if (stand_in || !game_order() || par_active.load(std::memory_order_relaxed) || cmd != pass_end_cmd ||
         thread_work != pass_end_work) {
         st_pass_full.fetch_add(1, std::memory_order_relaxed);
@@ -5031,6 +5095,12 @@ uint16_t draw_hazards(VkCommandBuffer cmd, const Program& p, const NvnState& s, 
 }
 
 } // namespace
+
+// (ReLink-R 0.0.7, RX_VK_GAME_BARRIERS: vk_texture.h; outside the anonymous namespace, for vk_replay.cpp)
+void game_barrier(VkCommandBuffer cmd, int32_t bits) { game_barrier_rec(cmd, bits); }
+void game_barrier_stats(int64_t out[4]) {
+    for (int i = 0; i < 4; i++) out[i] = st_gb[i].load(std::memory_order_relaxed);
+}
 
 void clear_color_target(VkCommandBuffer cmd, NvnState& s, int index, const float rgba[4], uint32_t mask) {
     ParLock lk;
