@@ -4404,6 +4404,22 @@ bool game_barriers_on() {
     }();
     return on;
 }
+// (ReLink-R 0.0.8, RX_VK_GAME_BARRIERS_PAR) Also in a parallel replay. 0.0.7 kept those full, and the Market records its big command
+// buffers in parallel: only 9-28 of its ~130 game barriers a frame were narrowed (log of 24 Nov). A parallel replay's segment is
+// recorded by one thread into a command buffer of its own (vk_replay.cpp, record_parallel), and everything the checks use is that
+// thread's: pass_end_cmd / pass_end_work, thread_work (vk_work.h), gb_cmd / gb_work, all reset when a recording begins
+// (draw_begin_recording). A barrier first in a segment has no pass before it on that command buffer: full, as before. The full
+// barriers' dedupe stays off in a parallel replay (its count is shared): unchanged. RX_VK_GAME_BARRIERS_PAR=0: full there, as 0.0.7.
+bool game_barriers_par() {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_GAME_BARRIERS_PAR");
+        const bool v = !(e && *e && atoi(e) == 0);
+        logf("vk: the game's barriers narrowed in parallel replays too: %s (RX_VK_GAME_BARRIERS_PAR%s)", v ? "on" : "off",
+             v ? "=0 turns it off" : " set");
+        return v;
+    }();
+    return on;
+}
 bool fragments_only(int32_t bits) {
     const uint32_t b = (uint32_t)bits;
     constexpr uint32_t kOrderFrag = 0x2 | 0x4, kInvTex = 0x10;
@@ -4411,7 +4427,7 @@ bool fragments_only(int32_t bits) {
 }
 } // namespace
 void game_barrier_rec(VkCommandBuffer cmd, int32_t bits) {
-    if (!game_barriers_on() || !fragments_only(bits) || par_active.load(std::memory_order_relaxed)) {
+    if (!game_barriers_on() || !fragments_only(bits) || (par_active.load(std::memory_order_relaxed) && !game_barriers_par())) {
         st_gb[1].fetch_add(1, std::memory_order_relaxed);
         full_barrier(cmd, "barrier (the game's nvnCommandBufferBarrier)");
         return;
@@ -4437,7 +4453,7 @@ void game_barrier_rec(VkCommandBuffer cmd, int32_t bits) {
 }
 namespace {
 void pass_start_barrier(VkCommandBuffer cmd, bool stand_in) {
-    if (!stand_in && cmd == gb_cmd && thread_work == gb_work && !par_active.load(std::memory_order_relaxed)) {
+    if (!stand_in && cmd == gb_cmd && thread_work == gb_work) {   // (gb_cmd is set only when the barrier was narrowed)
         st_gb[3].fetch_add(1, std::memory_order_relaxed);   // (RX_VK_GAME_BARRIERS: the game's barrier right before ordered this pass)
         return;
     }
@@ -5226,6 +5242,7 @@ void draw_begin_recording(int slot, VkCommandBuffer cmd, uint64_t value) {
     cur = &r;
     pass() = Pass{};
     work_since_barrier = false;
+    gb_cmd = VK_NULL_HANDLE;   // (ReLink-R 0.0.8: no narrowed game barrier carried into a new recording, whatever its handle held)
     pass_end_cmd = VK_NULL_HANDLE;   // (ReLink-R 0.0.6: a new recording's first pass starts with a full barrier, whatever its handle held)
     last_dyn_valid = false, last_desc_valid = false, last_vb_valid = false, last_pipeline = VK_NULL_HANDLE;
     vertex_set.on = false, last_ib.on = false;
