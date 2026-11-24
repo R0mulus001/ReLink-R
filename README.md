@@ -5,6 +5,9 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.8-dev**: the lighter game barriers of 0.0.7 also when a frame is recorded on several threads at once, as the Market's are:
+  0.0.7 narrowed only 9-28 of its ~130 a frame, the rest were recorded in parallel and kept full (`RX_VK_GAME_BARRIERS_PAR=0`
+  for 0.0.7's behaviour).
 - **0.0.7-dev**: the game's own GPU barriers only as strong as their flags ask. The ~70 a Market frame that only order the
   pixels of one pass before the next (ORDER_FRAGMENTS + INVALIDATE_TEXTURE) let the next pass's vertex work start while the last
   one finishes, and the next pass adds no full stop of its own after them; every other kind, and any barrier with ReLink's own
