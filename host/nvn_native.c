@@ -1058,22 +1058,81 @@ static int sync_log(void) {   /* (the first 30000 calls; HOS_NVN_SYNC_LOG=<n>: f
    flashed as walls for a frame, we thought; measured, holding made them far more frequent (61 vs 0-9 in a 60 s drive):
    MKW writes some of a frame's data in place right after its submit, as the console's GPU has read it by then. Off by
    default; HOS_NVN_HOLD=1: held. */
-typedef struct { int n; uint64_t h[64]; } held_submit;
+/* (ReLink-R 0.0.9, ported from HeyListen TICK-054, commit 4ae29eeb and its later fixes, GPL-3.0: Sacrappy/HeyListen)
+   HOS_NVN_HOLD=2, the default (=0: none held, as 0.0.8; =1: every submit held, as before): only the submits of threads other than
+   the presenting one (OoT's main thread, two a frame) are held, and a host thread of their own replays them ~10 us later; the
+   presenting thread replays any still held before its own next submit and its present, and whoever waits for them first (a
+   fence wait, a finish, a flush, an event poll) flushes them. The submit-time capture, the replay of those command buffers and
+   their queue submits, and with them the capture's wait for the GPU's late pages (~13 ms a frame on the main thread at the
+   Market on an RTX 3080 Laptop in Silent mode, 0.0.7's log), leave the game's main thread: its game code goes on meanwhile.
+   The capture is taken at the flush, ~10 us to ~1.5 ms after the game's submit (HeyListen measured 0.14% of the captured
+   pages with other bytes by then, HOS_NVN_HOLD_CHECK, and the picture alike) */
+typedef struct { int n; uint64_t h[64]; uint64_t queue; } held_submit;
 static held_submit held[256];
 static volatile LONG nheld;
-static CRITICAL_SECTION held_cs;
+static CRITICAL_SECTION held_cs, flush_cs;   /* (held_cs: the list; flush_cs: a flush and the presenting thread's submit, in order) */
 static int held_ready, hold_on = -1;
-static void held_init(void) {
-    if (!held_ready) { InitializeCriticalSection(&held_cs); held_ready = 1; }
-    if (hold_on < 0) { const char *e = getenv("HOS_NVN_HOLD"); hold_on = e && atoi(e) != 0; }   /* (off: see below) */
+static HosThread *present_thread;   /* (mode 2: the presenting thread, whose submits are not held) */
+static HANDLE hold_event;           /* (mode 2: wakes the held submits' thread at each hold) */
+static int64_t st_hold_flushes, st_hold_submits, st_hold_by[8];
+enum { HF_FLUSH, HF_FINISH, HF_PRESENT, HF_SYNC, HF_EVENT, HF_SUBMIT, HF_THREAD, HF_OTHER, HF_N };
+static void held_flush_why(int why);
+static DWORD WINAPI hold_flush_thread(void *p) {   /* (mode 2: a host thread, no virtual core, no guest code: the replay runs none) */
+    (void)p;
+    SetThreadDescription(GetCurrentThread(), L"hos held submits");
+    for (;;) {
+        WaitForSingleObject(hold_event, INFINITE);
+        held_flush_why(HF_THREAD);
+    }
+    return 0;
 }
-static void held_flush(void) {
+static void held_init(void) {
+    if (!held_ready) { InitializeCriticalSection(&held_cs); InitializeCriticalSection(&flush_cs); held_ready = 1; }
+    if (hold_on < 0) {
+        const char *e = getenv("HOS_NVN_HOLD");
+        hold_on = e && *e ? atoi(e) : 2;
+        if (hold_on < 0 || hold_on > 2) hold_on = 2;
+        hos_log("nvn: submits held: %s (HOS_NVN_HOLD=%d; =0: none held, as 0.0.8)", hold_on == 2 ? "the main thread's, replayed on a "
+                "host thread of their own" : hold_on == 1 ? "all, until a flush" : "none", hold_on);
+        if (hold_on == 2) {
+            hold_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+            HANDLE h = hold_event ? CreateThread(NULL, 0, hold_flush_thread, NULL, 0, NULL) : NULL;
+            if (h) CloseHandle(h);
+            else hos_log("nvn: the held submits' thread could not start: flushed by their waiters only");
+        }
+    }
+}
+/* the held submits replayed now, on this thread, in their order: under flush_cs, so that no submit of the presenting thread
+   comes between them (held_cs is let go before the replay). (HeyListen) The virtual core is given up before flush_cs is taken
+   and taken back after it is let go: flush_cs is held through a replay, up to hundreds of ms while an area loads, and a thread
+   that held a core while it waited for flush_cs stalled the threads on the other side until the 250-ms escape */
+static void held_flush_why(int why) {
     held_init();
     if (!nheld) return;
+    const int away = hos_vcore_away();
+    EnterCriticalSection(&flush_cs);
+    static held_submit local[256];
+    LONG n;
     EnterCriticalSection(&held_cs);
-    for (LONG i = 0; i < nheld; i++) rx_nvn_submit(held[i].h, held[i].n);
+    n = nheld;
+    memcpy(local, held, sizeof *held * (size_t)n);
     nheld = 0;
     LeaveCriticalSection(&held_cs);
+    for (LONG i = 0; i < n; i++) {
+        if (hold_on == 2) rx_nvn_submit_q(local[i].h, local[i].n, local[i].queue);
+        else rx_nvn_submit(local[i].h, local[i].n);
+    }
+    if (n) {
+        st_hold_submits += n, st_hold_by[why < HF_N ? why : HF_OTHER]++;
+        if (++st_hold_flushes % 3600 == 0)
+            hos_log("nvn: held submits: %lld flushes (by: queue flush %lld, finish %lld, present %lld, sync wait %lld, event poll %lld, "
+                    "the presenting thread's submit %lld, the held submits' thread %lld, other %lld), %lld submits",
+                    (long long)st_hold_flushes, (long long)st_hold_by[0], (long long)st_hold_by[1], (long long)st_hold_by[2],
+                    (long long)st_hold_by[3], (long long)st_hold_by[4], (long long)st_hold_by[5], (long long)st_hold_by[6],
+                    (long long)st_hold_by[7], (long long)st_hold_submits);
+    }
+    LeaveCriticalSection(&flush_cs);
+    if (away) hos_vcore_back();
 }
 static uint64_t held_count(void) { return (uint64_t)nheld; }
 
@@ -1108,7 +1167,7 @@ NV(nvnSyncWait) {
                             (unsigned long long)s->fence, (unsigned long long)U64(1), (unsigned long long)c->x[30],
                             (unsigned long long)rx_nvn_fence(), (unsigned long long)rx_nvn_replayed());
     if (!s->fenced) { RET(NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED); return; }
-    if (s->fenced == 1 && s->fence > rx_nvn_fence()) held_flush();   /* (a wait flushes what it waits for) */
+    if (s->fenced == 1 && s->fence > rx_nvn_fence()) held_flush_why(HF_SYNC);   /* (a wait flushes what it waits for) */
     if (rx_nvn_wait(s->fence, 0)) { RET(NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED); return; }
     static int block = -1;   /* HOS_NVN_SYNC_BLOCK=1 (experiment): a poll waits for the GPU */
     if (block < 0) block = getenv("HOS_NVN_SYNC_BLOCK") != NULL;
@@ -1146,6 +1205,8 @@ NV(nvnEventGetValue) {
         if (nowait < 0) nowait = getenv("HOS_PRESENT_NOWAIT") && atoi(getenv("HOS_PRESENT_NOWAIT")) != 0;
         if (nowait && (c->x[30] == 0x805904a0 || c->x[30] == 0x80590530)) { RET(1); return; }
     }
+    held_init();
+    if (hold_on == 2 && nheld) held_flush_why(HF_EVENT);   /* (ReLink-R 0.0.9, HeyListen TICK-054: a held submit may be what signals it) */
     uint32_t v = 0; nvn_gpu_read(((const nvn_event *)P(0))->gpu, &v, 4); RET(v);
     if (sync_log()) hos_log("nvn: EventGetValue %p = %u (lr %#llx)", P(0), v, (unsigned long long)c->x[30]);
 }
@@ -1186,9 +1247,9 @@ NV(nvnQueueBuilderSetQueueMemory) { QB(P(0))->mem = U64(1); QB(P(0))->mem_sz = U
 NV(nvnQueueInitialize) { nvn_queue *q = (nvn_queue *)P(0); q->magic = NVN_MAGIC('Q', 'U', 'E', 'U'); q->submits = 0; RET(1); }
 NV(nvnQueueFinalize) { ((nvn_queue *)P(0))->magic = 0; }
 NV(nvnQueueGetError) { if (P(1)) memset(P(1), 0, sizeof(NVNqueueErrorInfo)); RET(NVN_QUEUE_GET_ERROR_RESULT_GPU_NO_ERROR); }
-NV(nvnQueueFlush) { held_flush(); }
+NV(nvnQueueFlush) { held_flush_why(HF_FLUSH); }
 NV(nvnQueueFinish) {
-    held_flush();
+    held_flush_why(HF_FINISH);
     const int away = hos_vcore_away();
     const int64_t t0 = hos_now_ns();
     rx_nvn_finish();
@@ -2297,24 +2358,27 @@ NV(nvnQueueSubmitCommands) {
         resolve_deferred((uint8_t *)(uintptr_t)h[i]);
     }
     held_init();
-    if (!hold_on) {
+    const int mine = hold_on == 2 && (!present_thread || hos_self() == present_thread);   /* (0.0.9: the presenting thread's own) */
+    if (!hold_on || mine) {
         /* (the replay runs here, on this thread, for ~9 ms a frame (vk_replay.cpp submit_q, RX_VK_ASYNC off): the virtual
            core is given up for it, as Present and AcquireTexture do, so the game's other threads run on it meanwhile.
-           Nothing in the replay runs guest code or needs the core) */
+           Nothing in the replay runs guest code or needs the core. Given up before flush_cs is taken, as held_flush_why does) */
         const int away = hos_vcore_away();
+        if (mine) EnterCriticalSection(&flush_cs);   /* (the held ones first, and nothing between them and this one) */
+        if (mine && nheld) held_flush_why(HF_SUBMIT);
         rx_nvn_submit_q(h, n, (uint64_t)(uintptr_t)q);
+        if (mine) LeaveCriticalSection(&flush_cs);
         if (away) hos_vcore_back();
         return;
     }
+    if (nheld >= (LONG)(sizeof held / sizeof *held) - 1) held_flush_why(HF_OTHER);   /* (full: what is held goes now) */
     EnterCriticalSection(&held_cs);
-    if (nheld == (LONG)(sizeof held / sizeof *held)) {   /* (full: what is held goes now) */
-        for (LONG i = 0; i < nheld; i++) rx_nvn_submit(held[i].h, held[i].n);
-        nheld = 0;
-    }
     held[nheld].n = n;
     memcpy(held[nheld].h, h, 8 * (size_t)n);
+    held[nheld].queue = (uint64_t)(uintptr_t)q;
     nheld++;
     LeaveCriticalSection(&held_cs);
+    if (hold_event) SetEvent(hold_event);
 }
 
 /* ---- window ---- */
@@ -2430,7 +2494,9 @@ NV(nvnQueuePresentTexture) {
     nvn_win *o = (nvn_win *)P(1);
     const int i = I(2);
     if (i < 0 || i >= o->ntex) die("present of window texture %d", i);
-    held_flush();   /* (a present flushes the queue) */
+    held_init();
+    present_thread = hos_self();   /* (ReLink-R 0.0.9, HOS_NVN_HOLD=2: the presenting thread, whose submits are not held) */
+    held_flush_why(HF_PRESENT);   /* (a present flushes the queue) */
     {
         const int away = hos_vcore_away();
         rx_nvn_present(o->tex[i], o->crop);

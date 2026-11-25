@@ -5,6 +5,10 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.9-dev**: the game's main thread no longer replays its own GPU submits: a thread of their own does it, and with it the
+  wait for the GPU before each submit's memory copy (~13 ms a frame in the Market on 0.0.7), so the game's code goes on meanwhile.
+  Ported from HeyListen (TICK-054). `HOS_NVN_HOLD=0` for 0.0.8's behaviour. Stage 1 of 2; stage 2 (0.0.10) moves that wait off the
+  CPU entirely (HeyListen TICK-060).
 - **0.0.8-dev**: the lighter game barriers of 0.0.7 also when a frame is recorded on several threads at once, as the Market's are:
   0.0.7 narrowed only 9-28 of its ~130 a frame, the rest were recorded in parallel and kept full (`RX_VK_GAME_BARRIERS_PAR=0`
   for 0.0.7's behaviour).
