@@ -4397,9 +4397,11 @@ std::atomic<int64_t> st_gb[4];
 bool game_barriers_on() {
     static const bool on = [] {
         const char* e = getenv("RX_VK_GAME_BARRIERS");
-        const bool v = e && *e ? atoi(e) != 0 : dev.props.vendorID == 0x10DE;
+        // (ReLink-R 0.0.10) off by default: no gain measured (0.0.8's Market 37.8 fps against 0.0.7's 36, inside the spread;
+        // HeyListen TICK-057 measured the same narrowing at 0-0.4 ms), and flicker seen in the Treasure Chest Shop on 0.0.9 with it on
+        const bool v = e && *e && atoi(e) != 0;
         logf("vk: the game's barriers as strong as their flags ask (fragment ordering waits in the fragment stages only): %s "
-             "(RX_VK_GAME_BARRIERS%s)", v ? "on" : "off", e && *e ? " set" : v ? "=0 turns it off" : "=1 turns it on");
+             "(RX_VK_GAME_BARRIERS%s)", v ? "on" : "off", e && *e ? " set" : "=1 turns it on");
         return v;
     }();
     return on;

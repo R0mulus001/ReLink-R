@@ -5,6 +5,10 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.10-dev**: fixes 0.0.9. The game's main thread now really hands its submits to their own thread: 0.0.9 still did the work
+  itself every time the game flushed, and then waited for the other render thread, which caused stutter. The lighter game
+  barriers of 0.0.7/0.0.8 are off by default (no gain measured, likely cause of flicker in the Treasure Chest Shop);
+  `RX_VK_GAME_BARRIERS=1` turns them back on, `HOS_NVN_HOLD=0` turns the submit thread off.
 - **0.0.9-dev**: the game's main thread no longer replays its own GPU submits: a thread of their own does it, and with it the
   wait for the GPU before each submit's memory copy (~13 ms a frame in the Market on 0.0.7), so the game's code goes on meanwhile.
   Ported from HeyListen (TICK-054). `HOS_NVN_HOLD=0` for 0.0.8's behaviour. Stage 1 of 2; stage 2 (0.0.10) moves that wait off the

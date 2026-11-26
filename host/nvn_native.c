@@ -1247,7 +1247,10 @@ NV(nvnQueueBuilderSetQueueMemory) { QB(P(0))->mem = U64(1); QB(P(0))->mem_sz = U
 NV(nvnQueueInitialize) { nvn_queue *q = (nvn_queue *)P(0); q->magic = NVN_MAGIC('Q', 'U', 'E', 'U'); q->submits = 0; RET(1); }
 NV(nvnQueueFinalize) { ((nvn_queue *)P(0))->magic = 0; }
 NV(nvnQueueGetError) { if (P(1)) memset(P(1), 0, sizeof(NVNqueueErrorInfo)); RET(NVN_QUEUE_GET_ERROR_RESULT_GPU_NO_ERROR); }
-NV(nvnQueueFlush) { held_flush_why(HF_FLUSH); }
+/* (ReLink-R 0.0.10) mode 2: the game's flush does not flush: the held submits' thread is on it (HeyListen's own line). 0.0.9 flushed here,
+   and OoT's main thread flushes right after each of its submits: 25169 of 25200 flushes were the game's, on its main thread, which
+   then waited under flush_cs for the presenting thread's whole replay (frames over 40 ms 0.7 -> 3.2 every 5 s, fps unchanged) */
+NV(nvnQueueFlush) { held_init(); if (hold_on != 2) held_flush_why(HF_FLUSH); }
 NV(nvnQueueFinish) {
     held_flush_why(HF_FINISH);
     const int away = hos_vcore_away();
