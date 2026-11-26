@@ -4157,7 +4157,7 @@ thread_local BindMemo bind_memo[256];
 
 BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     if (written) texture_gpu_wrote(gpu, size);
-    if (written && size) {   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: every written binding, mirrored or not, in a segment or not)
+    if (written && size && diff_mode()) {   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: every written binding, mirrored or not, in a segment or not)
         uint64_t g = gpu, av = 0;
         if (gpu >= (1ull << 40)) g = host->gpu_ptr(gpu, &av) ? host->gpu_guest(gpu) : 0;
         if (g) diff_gpu_wrote(g, size);
