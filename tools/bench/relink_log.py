@@ -64,6 +64,9 @@ RE_VI_FRAMES = re.compile(r"\] vi: ([0-9]+) frames presented \(" + NUM + r" fps 
 RE_VI_HIST = re.compile(r"\] vi: present intervals: <15.5 ms ([0-9]+), 15.5-17.8 ([0-9]+), 17.8-22 ([0-9]+), 22-30 ([0-9]+), "
                         r"30-40 ([0-9]+), over 40 ([0-9]+)")
 RE_VI_FINE = re.compile(r"\] vi: frame times: .*?; by ms:(.*)")
+RE_MSDIFF = re.compile(r"\] vk: mirror syncs' chunk diff \(RX_VK_MSYNC_DIFF=([0-9]), 600 submits, a submit\): " + NUM
+                       + r" live pages hashed, .*?; MB: " + NUM + r" copied from snapshots, " + NUM + r" left out, " + NUM
+                       + r" copied live; CPU " + NUM + r" ms")
 RE_LATE = re.compile(r"\] vk: captures' waits for late pages: ([0-9]+), ([0-9]+) of them cut; the cap now " + NUM
                      + r" ms .*90th percentile " + NUM + r" ms")
 RE_SLOW = re.compile(r"\] vk: slow submit: " + NUM + r" ms: (.*)")
@@ -127,6 +130,7 @@ class Log:
     def _parse(self):
         cur_map = None
         cur_up = None        # (the upscaler and its input size, as last logged)
+        msdiff = None        # (the last chunk diff report: per submit)
         pend = {}            # (lines before a vk window's "presents" line: replay time, mirrors)
         win = None           # (the open vk window, closed by its "GPU time" line)
         vi = None
@@ -184,6 +188,11 @@ class Log:
                     for k, v in pend.get("replay", {}).items():
                         win["cpu_" + k.replace(" ", "_")] = v
                     win.update(pend.get("mirrors", {}))
+                    if msdiff:   # (ReLink-R 0.0.13: the chunk diff's last report, a submit -> a frame)
+                        k = win["submits"] or 6
+                        win["msdiff_mode"] = msdiff[0]
+                        win["msdiff_snap_mb"], win["msdiff_skip_mb"], win["msdiff_live_mb"], win["msdiff_cpu_ms"] = (
+                            msdiff[1] * k, msdiff[2] * k, msdiff[3] * k, msdiff[4] * k)
                     pend = {}
                     continue
                 if win is not None:
@@ -256,6 +265,10 @@ class Log:
                         k = 100 if k.startswith("100") else int(k)
                         fine[k] = fine.get(k, 0) + int(v)
                     self.vi[-1]["fine"] = fine
+                    continue
+                m = RE_MSDIFF.search(line)
+                if m:
+                    msdiff = (int(m.group(1)), flt(m.group(3)), flt(m.group(4)), flt(m.group(5)), flt(m.group(6)))
                     continue
                 m = RE_LATE.search(line)
                 if m:
@@ -396,7 +409,8 @@ VK_COLS = [("fps", "FPS (vk)"), ("draws", "draws"), ("passes", "passes"), ("disp
            ("cpu_submit", "CPU submit ms"), ("cpu_memory_sync", "of it memory sync"), ("cpu_draw", "CPU draw ms"),
            ("full_barriers", "full barriers"), ("full_left_out", "full left out"), ("disp_barriers", "dispatch barriers"),
            ("pass_start_full", "pass-start full"), ("game_barriers", "game barriers"), ("game_frag", "game frag-only"),
-           ("msync_mb", "msync MB"), ("msync_copies", "msync copies"), ("wb_mb", "write-back MB"), ("uploads", "uploads"),
+           ("msync_mb", "msync MB"), ("msdiff_snap_mb", "diff: MB from snapshots"),
+           ("msdiff_skip_mb", "diff: MB left out"), ("msdiff_live_mb", "diff: MB live"), ("msdiff_cpu_ms", "diff: CPU ms"), ("msync_copies", "msync copies"), ("wb_mb", "write-back MB"), ("uploads", "uploads"),
            ("upload_mb", "upload MB"), ("mesh_one_by_one", "mesh conv 1-by-1"), ("mesh_batched", "mesh conv batched"),
            ("slow_submits", "slow submits")]
 
