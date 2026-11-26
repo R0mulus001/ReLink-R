@@ -32,6 +32,7 @@
 #include "import_fence.h"   // (ReLink-R 0.0.5, from Hookshot #3043)
 #include "mirror_inherit.h"
 #include "mirror_trim.h"
+#include "msync_diff.h"   // (ReLink-R 0.0.13, from HeyListen 3df13599: the mirror syncs' chunk hashes)
 #ifdef __linux__
 #include <cerrno>
 #include <dlfcn.h>
@@ -94,8 +95,10 @@ struct Pool {
     std::vector<uint64_t> wb_flushing;    // (a bit a page: in this recording's flush, memory_wb_flush_queue: not put off again by it)
     std::vector<uint32_t> wb_flush_words; // (the words of wb_flushing that are not zero)
     uint32_t wb_pending_n = 0;
+    uint32_t mirror_id = 0;   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: new at each mirror_make; the diff's page hashes name their mirror)
 };
 uint64_t mem_rec_value = 0, mem_completed = 0;   // (the recording being made, and the GPU's progress)
+void diff_gpu_wrote(uint64_t guest, uint64_t size);   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF, below: the GPU may write the mirror there)
 
 struct GuestPool {
     uint64_t lo = 0, hi = 0;   // (aligned outwards the same way, so an import covers what the lookup found)
@@ -911,6 +914,7 @@ bool gpu_pages_on() {
 }
 void memory_stamp_gpu(uint64_t guest, uint64_t size) {
     if (!size) return;
+    diff_gpu_wrote(guest, size);   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF)
     memory_stamp(guest, size);
     if (!gpu_pages_on()) return;
     std::lock_guard lk(gpu_pages_mu);
@@ -1000,6 +1004,7 @@ void memory_meter_range(uint64_t guest, uint64_t size) {
     if (!meter_seen.exchange(true)) logf("vk: fast sync: the exposure meter is met, the presenting thread's captures no longer wait");
 }
 void memory_protect_gpu(uint64_t guest, uint64_t size) {
+    diff_gpu_wrote(guest, size);   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: a bare entry's guessed range, whatever RX_VK_PROTECT_BARE)
     if (!size || !protect_bare_on()) return;
     const uint64_t p0 = guest >> kPageShift, p1 = (guest + size - 1) >> kPageShift;
     if (p1 - p0 > 16384) return;   // (64 MB at most: a guess past that is not the GPU's records)
@@ -3532,6 +3537,118 @@ void append_capture_copy(std::vector<VkBufferCopy>& runs, const VkBufferCopy& ne
     runs.push_back(next);
 }
 
+// ---- (ReLink-R 0.0.13) The mirror syncs' chunk diff (RX_VK_MSYNC_DIFF), after HeyListen 3df13599 (TICK-048) ----
+// On this owner's laptop (RTX 3080 Laptop, PCIe link measured at 6.7 GB/s) a Market frame's mirror syncs copied ~34 MB of the
+// CPU's pages into the VRAM mirrors: 9.4 ms a frame of upload command buffer time on the GPU (0.0.12's log, 96 % busy), against
+// 1.2 MB in HeyListen. HeyListen found 85 % of such bytes unchanged at 256-byte granularity (the game rewrites its per-frame data
+// with the bytes it held) and copies only the chunks whose hash changed. Its diff hashes the pages of the submit-time captures;
+// ReLink-R copies 96 % of its synced pages live from guest memory (the capture covers the 2D pass's small buffers only), which a
+// hash taken at the replay cannot describe: the GPU's copy reads guest memory when it runs, later, and the game writes on. So
+// here a live page's changed chunks are copied from a snapshot instead: each chunk is read into a local buffer, hashed there,
+// and written to a host staging block the copy reads. The mirror then holds exactly the bytes the page's hashes describe.
+// Which pages: those of a mirrored pool synced outside a parallel replay's segments, whole 4 KB pages, that the GPU was never
+// noted to write (diff_gpu_wrote: written bindings, GPU write stamps, bare entries' and wide bindings' ranges, the readback
+// refresh; a page once written by the GPU stays out for good, its live copy as before). A page copied any other way (from a
+// capture, in a segment, kept for the GPU, put off by the lazy write-back, no staging room) loses its hashes. A new mirror
+// (mirror_make) has a new id: no hash of an older one holds. Changed chunks go as the mirror syncs' pass (RX_VK_MSYNC_PASS) reads
+// the captures. RX_VK_MSYNC_DIFF=0 (the default until the owner's check): off, as 0.0.12; 1: hashed and counted, whole pages
+// copied live as before (the measure); 2: changed chunks only. RX_VK_MSYNC_DIFF_GROUP=<1|2|4|8|16> chunks: the copy granularity.
+struct DiffPage {
+    uint32_t rec = 0;   // (the mirror epoch of the sync that recorded the hashes; 0: none)
+    uint32_t mid = 0;   // (the mirror they describe)
+    uint32_t gpu = 0;   // (the GPU was noted to write the page: never diffed)
+    uint32_t pad = 0;
+    uint64_t h[msync_diff::kChunks];
+};
+constexpr uint64_t kDiffChunkPages = 1u << 13;   // (32 MB of guest memory a table chunk: 1.2 MB of entries)
+std::mutex diff_mu;                              // (after pools_mu when both)
+std::vector<std::unique_ptr<DiffPage[]>> diff_table;
+uint64_t diff_table_bytes = 0;
+uint32_t diff_void_all = 0;                      // (a GPU write too large to note by page: every hash recorded before is void)
+int diff_mode() {
+    static const int v = [] {
+        const char* e = getenv("RX_VK_MSYNC_DIFF");
+        const int m = e ? std::clamp(atoi(e), 0, 2) : 0;
+        logf("vk: mirror syncs' chunk diff (RX_VK_MSYNC_DIFF=%d): %s", m,
+             m == 2 ? "on: the live pages' changed 256-byte chunks only, from a snapshot" : m == 1 ? "measured only, whole pages copied" : "off");
+        return m;
+    }();
+    return v;
+}
+unsigned diff_group() {
+    static const unsigned v = getenv("RX_VK_MSYNC_DIFF_GROUP") ? std::clamp(atoi(getenv("RX_VK_MSYNC_DIFF_GROUP")), 1, 16) : 1;
+    return v;
+}
+DiffPage* diff_page(uint64_t page, bool make) {   // (diff_mu held)
+    const uint64_t c = page / kDiffChunkPages;
+    if (c >= diff_table.size()) {
+        if (!make || c >= (1ull << 20)) return nullptr;
+        diff_table.resize(c + 1);
+    }
+    if (!diff_table[c]) {
+        if (!make) return nullptr;
+        diff_table[c].reset(new DiffPage[kDiffChunkPages]());
+        diff_table_bytes += kDiffChunkPages * sizeof(DiffPage);
+    }
+    return &diff_table[c][page % kDiffChunkPages];
+}
+void diff_gpu_wrote(uint64_t guest, uint64_t size) {
+    if (!size || !diff_mode() || guest >= (1ull << 40)) return;
+    const uint64_t p0 = guest >> kPageShift, p1 = (guest + size - 1) >> kPageShift;
+    std::lock_guard lk(diff_mu);
+    if (p1 - p0 > 65536) {   // (256 MB and more: every hash, and the pages stay hashed only from the next sync on)
+        diff_void_all = (uint32_t)mirror_epoch + 1;
+        return;
+    }
+    for (uint64_t pg = p0; pg <= p1; pg++)
+        if (DiffPage* d = diff_page(pg, true)) d->gpu = 1, d->rec = 0;   // (made if need be: the flag outlives any hash)
+}
+// (the snapshots: host blocks with a device address, taken again once the submissions that read them are done)
+struct StageBlock {
+    VkBuffer buf = VK_NULL_HANDLE;
+    VmaAllocation alloc = nullptr;
+    uint8_t* map = nullptr;
+    uint64_t value = 0, fill = 0;
+};
+constexpr int kStageBlocks = 32;
+constexpr uint64_t kStageBlockBytes = 4u << 20;   // (128 MB at most)
+StageBlock stage_blocks[kStageBlocks];
+int stage_cur = -1;
+/// (pools_mu held) bytes of snapshot room for the recording being made, or null (none free: the page goes live, as before)
+StageBlock* stage_get(uint64_t bytes, uint64_t* at) {
+    if (bytes > kStageBlockBytes) return nullptr;
+    if (stage_cur >= 0) {
+        StageBlock& b = stage_blocks[stage_cur];
+        if (b.map && b.fill + bytes <= kStageBlockBytes) {
+            b.value = std::max(b.value, mem_rec_value);
+            *at = b.fill, b.fill += bytes;
+            return &b;
+        }
+    }
+    const int next = (stage_cur + 1) % kStageBlocks;
+    StageBlock& b = stage_blocks[next];
+    if (b.map && b.value > mem_completed) return nullptr;   // (still read by a submission the GPU has not done)
+    if (!b.map) {
+        void* map = nullptr;
+        if (!create_buffer(kStageBlockBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, true, b.buf, b.alloc, &map) || !map) {
+            if (b.buf) destroy_buffer(b.buf, b.alloc);
+            b = {};
+            return nullptr;
+        }
+        b.map = (uint8_t*)map;
+    }
+    stage_cur = next;
+    b.fill = bytes, b.value = mem_rec_value;
+    *at = 0;
+    return &b;
+}
+struct DiffStats {
+    int64_t pages = 0, valid = 0, same_pages = 0, gpu_pages = 0, voided = 0, no_room = 0;
+    int64_t live_bytes = 0, staged_bytes = 0, skipped_bytes = 0;
+    int64_t ns = 0;
+} dst_;
+
 /// The pages of the pool the CPU wrote since its mirror's sync, copied in (the upload command buffer)
 void mirror_sync(Pool& p) {
     p.synced_epoch = mirror_epoch;
@@ -3542,6 +3659,21 @@ void mirror_sync(Pool& p) {
     uint64_t run_lo = 0, run_hi = 0;
     static thread_local std::vector<uint64_t> lazy_pages;   // (RX_VK_WB_LAZY: pages put off that the CPU wrote, as pool offsets)
     lazy_pages.clear();
+    // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: see "the mirror syncs' chunk diff" above)
+    const int dmode = diff_mode();
+    const bool d_ok = dmode && p.mirror_id && !par_active.load(std::memory_order_relaxed);
+    const uint32_t d_epoch = (uint32_t)mirror_epoch;
+    std::unique_lock<std::mutex> dlk(diff_mu, std::defer_lock);
+    if (dmode) dlk.lock();
+    const auto d_t0 = dmode ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    std::map<VkBuffer, std::vector<VkBufferCopy>> stage_runs;   // (the snapshots' chunks, by staging block)
+    StageBlock* stage_used[kStageBlocks];
+    int stage_used_n = 0;
+    std::vector<VkBufferCopy> diff_whole;   // (the diffed pages whole, pool offsets: for the write-back shadow's baseline below)
+    auto d_void = [&](uint64_t pg) {        // (copied another way: its hashes no longer say what the mirror holds)
+        if (!dmode) return;
+        if (DiffPage* d = diff_page(pg, false); d && d->rec) d->rec = 0, dst_.voided++;
+    };
     for (uint64_t page = p.lo >> kPageShift; page < (p.hi + 4095) >> kPageShift;) {
         if (page % kRegionPages == 0 && region_gen[page / kRegionPages] <= p.synced_gen) {
             page += kRegionPages;   // (a clean 2 MB region)
@@ -3564,6 +3696,7 @@ void mirror_sync(Pool& p) {
         }
         if (dirty && protect_bare_on() && prot_page_since(page, p.synced_gen)) {   // (the GPU's records kept: see prot_pages)
             st_prot_kept++;
+            d_void(page);
             page++;
             continue;
         }
@@ -3603,12 +3736,66 @@ void mirror_sync(Pool& p) {
                         {(uint64_t)e.slot * 4096 + (ga - (page << kPageShift)), ga - p.lo, gb - ga});
                     b->second.last_use = std::max(b->second.last_use, cur_cap_value);
                     (e.gen == cur_cap_gen ? st_sync_cap_pages : st_sync_old_pages)++;
+                    d_void(page);   // (ReLink-R 0.0.13)
                     page++;
                     continue;
                 }
             }
         }
+        // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF) a live page of the CPU's alone: its changed chunks from a snapshot, the rest left out
+        bool measured = false;   // (RX_VK_MSYNC_DIFF=1: hashed for the count, copied live below, its hashes kept)
+        if (dirty && d_ok && !lazy_page) {
+            const uint64_t ga = page << kPageShift;
+            uint64_t avail = 0;
+            const uint8_t* src = ga >= p.lo && ga + 4096 <= p.hi ? host->gpu_ptr(ga, &avail) : nullptr;
+            DiffPage* d = src && avail >= 4096 ? diff_page(page, true) : nullptr;
+            if (d && d->gpu) dst_.gpu_pages++, d = nullptr;
+            if (d) {
+                dst_.pages++;
+                uint64_t h[msync_diff::kChunks];
+                msync_diff::page_hash(src, h);   // (as the page is now; the chunks found changed are read again below, for the copy)
+                const bool valid = d->rec && d->mid == p.mirror_id && d->rec > diff_void_all;
+                uint32_t mask = 0xffff;
+                if (valid) dst_.valid++, mask = msync_diff::changed_mask(h, d->h, diff_group());
+                const uint64_t n = 256ull * (uint64_t)__builtin_popcount(mask);
+                if (dmode == 1) {   // (the measure: copied live below as before; the hashes only for the next count)
+                    dst_.skipped_bytes += 4096 - (int64_t)n;
+                    std::memcpy(d->h, h, sizeof h);
+                    d->rec = d_epoch, d->mid = p.mirror_id;
+                    measured = true;
+                } else {
+                    uint64_t at = 0;
+                    StageBlock* sb = n ? stage_get(n, &at) : nullptr;
+                    if (n && !sb) {
+                        dst_.no_room++;
+                        d->rec = 0;   // (copied live below: no hash holds)
+                    } else {
+                        uint32_t k = 0;
+                        for (unsigned c = 0; c < msync_diff::kChunks; c++) {
+                            if (!(mask >> c & 1)) continue;   // (unchanged: the mirror holds these bytes, d->h[c] == h[c])
+                            alignas(32) uint8_t tmp[msync_diff::kChunk];
+                            std::memcpy(tmp, src + c * msync_diff::kChunk, sizeof tmp);   // (the snapshot: hashed and copied alike)
+                            d->h[c] = msync_diff::chunk_hash(tmp);
+                            std::memcpy(sb->map + at + (uint64_t)k * msync_diff::kChunk, tmp, sizeof tmp);
+                            append_capture_copy(stage_runs[sb->buf], {at + (uint64_t)k * msync_diff::kChunk,
+                                                                      ga - p.lo + (uint64_t)c * msync_diff::kChunk, msync_diff::kChunk});
+                            k++;
+                        }
+                        if (sb && std::find(stage_used, stage_used + stage_used_n, sb) == stage_used + stage_used_n)
+                            stage_used[stage_used_n++] = sb;
+                        d->rec = d_epoch, d->mid = p.mirror_id;
+                        dst_.staged_bytes += (int64_t)n, dst_.skipped_bytes += 4096 - (int64_t)n;
+                        if (!n) dst_.same_pages++;
+                        diff_whole.push_back({ga - p.lo, ga - p.lo, 4096});
+                        page++;
+                        continue;
+                    }
+                }
+            }
+        }
         if (dirty) {
+            if (!measured) d_void(page);   // (ReLink-R 0.0.13: copied live, as it is when the GPU's copy runs)
+            if (dmode) dst_.live_bytes += 4096;
             st_sync_live_pages++;   // (dirty, not in this submit's capture: guest memory as it is now)
             live_by_pool[p.lo]++;
             {   // (RX_VK_LOG_LIVE=1: why, 300 lines: the page's generation, its entry's, the newest capture's)
@@ -3645,16 +3832,35 @@ void mirror_sync(Pool& p) {
         for (const VkBufferCopy& r : rs) st_sync_bytes += (int64_t)r.size, gp.bytes += r.size;
         st_sync_copies += (int64_t)rs.size();
     }
+    for (const auto& [buf, rs] : stage_runs) {   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: the changed chunks, from their snapshots)
+        if (msync_pass_on() && msync_pass_add(p, buf, rs)) {
+            for (const VkBufferCopy& r : rs) st_sync_bytes += (int64_t)r.size;
+            st_sync_copies += (int64_t)rs.size();
+            continue;
+        }
+        GprofSpan gp(upload_command_buffer(), "msync copies (changed chunks from the diff's snapshots -> mirror)");
+        gp.items = (int)rs.size();
+        vkCmdCopyBuffer(upload_command_buffer(), buf, p.mirror, (uint32_t)rs.size(), rs.data());
+        for (const VkBufferCopy& r : rs) st_sync_bytes += (int64_t)r.size, gp.bytes += r.size;
+        st_sync_copies += (int64_t)rs.size();
+    }
+    for (int i = 0; i < stage_used_n; i++) flush_mapped(stage_used[i]->alloc, stage_used[i]->fill);   // (the snapshots, before the submit)
     msync_pass_flush();
-    if (runs.empty()) return;
-    checkpoint_mark(upload_command_buffer(), p.lo, 'm');
-    {
+    if (dmode) {
+        dst_.ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - d_t0).count();
+        dlk.unlock();
+    }
+    if (runs.empty() && diff_whole.empty()) return;
+    if (!runs.empty()) {
+        checkpoint_mark(upload_command_buffer(), p.lo, 'm');
         GprofSpan gp(upload_command_buffer(), "msync copies (CPU pages live from guest memory -> mirror)");
         gp.items = (int)runs.size();
         vkCmdCopyBuffer(upload_command_buffer(), p.buffer, p.mirror, (uint32_t)runs.size(), runs.data());
         for (const VkBufferCopy& r : runs) st_sync_bytes += (int64_t)r.size, gp.bytes += r.size;
         st_sync_copies += (int64_t)runs.size();
     }
+    // (ReLink-R 0.0.13) the diffed pages go into the write-back shadow's baseline whole, as their live copies did
+    if (!diff_whole.empty()) runs.insert(runs.end(), diff_whole.begin(), diff_whole.end());
     // (relink) the write-back diff's shadow as the mirror's baseline, with the submit-time capture off: the pages just copied
     // into the mirror go into the shadow too, so after the GPU's work the two differ exactly where the GPU wrote, and only
     // those words are written back: never the mirror's older words over what the game wrote since (see shadow_written).
@@ -3733,6 +3939,7 @@ void memory_note_gpu_write(uint64_t gpu, uint64_t size) {
         if (!host->gpu_ptr(gpu, &avail) || avail < size) return;
         guest = host->gpu_guest(gpu);
     }
+    diff_gpu_wrote(guest, size);   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF)
     std::lock_guard lk(pools_mu);
     rb_hazard_locked(guest, guest + size);
 }
@@ -3796,6 +4003,7 @@ bool memory_rb_refresh(VkCommandBuffer up) {
             if (rs[k].srcOffset + rs[k].size == rs[i].srcOffset) rs[k].size += rs[i].size;
             else rs[++k] = rs[i];
         rs.resize(k + 1);
+        for (const VkBufferCopy& r : rs) diff_gpu_wrote(pp->lo + r.dstOffset, r.size);   // (ReLink-R 0.0.13: the mirror written from guest memory)
         vkCmdCopyBuffer(up, pp->buffer, pp->mirror, (uint32_t)rs.size(), rs.data());
         gp.items += (int)rs.size();
         for (const VkBufferCopy& r : rs) gp.bytes += r.size;
@@ -3945,6 +4153,11 @@ thread_local BindMemo bind_memo[256];
 
 BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     if (written) texture_gpu_wrote(gpu, size);
+    if (written && size) {   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: every written binding, mirrored or not, in a segment or not)
+        uint64_t g = gpu, av = 0;
+        if (gpu >= (1ull << 40)) g = host->gpu_ptr(gpu, &av) ? host->gpu_guest(gpu) : 0;
+        if (g) diff_gpu_wrote(g, size);
+    }
     if (written && size && size <= (8ull << 20) && dw_on()) {
         uint64_t g = gpu;
         uint64_t dw_avail = 0;
@@ -4811,6 +5024,11 @@ bool mirror_make(Pool& pool) {
             }
         }
         p->mstate = Pool::MIRROR_ON;
+        {   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: hashes recorded for an earlier mirror of these pages do not hold for this one)
+            static uint32_t ids = 0;
+            if (++ids == 0) ++ids;   // (0: no mirror)
+            p->mirror_id = ids;
+        }
         pools_gen.fetch_add(1, std::memory_order_relaxed);   // (the binding's buffer changes: guest memory, then this mirror)
         p->synced_gen = gen_now;
         p->synced_epoch = mirror_epoch;
@@ -5411,6 +5629,17 @@ void memory_end_submission(VkCommandBuffer cmd) {
                 logf("vk: mirror syncs' pass (600 submits): %lld dispatches, %lld chunks; %lld syncs as copies (no table room)",
                      (long long)st_msync_dispatches, (long long)st_msync_chunks, (long long)st_msync_fallbacks);
                 st_msync_dispatches = st_msync_chunks = st_msync_fallbacks = 0;
+            }
+            if (diff_mode()) {   // (ReLink-R 0.0.13, RX_VK_MSYNC_DIFF: what the chunk diff did, a submit)
+                std::lock_guard dl(diff_mu);
+                const double k = 1.0 / 600, mb = k / 1048576.0;
+                logf("vk: mirror syncs' chunk diff (RX_VK_MSYNC_DIFF=%d, 600 submits, a submit): %.1f live pages hashed, %.1f with "
+                     "hashes that held, %.1f unchanged whole, %.1f the GPU writes (never diffed), %.1f hashes voided by other copies, "
+                     "%.1f no staging room; MB: %.3f copied from snapshots, %.3f left out, %.3f copied live; CPU %.3f ms; table %llu MB",
+                     diff_mode(), dst_.pages * k, dst_.valid * k, dst_.same_pages * k, dst_.gpu_pages * k, dst_.voided * k,
+                     dst_.no_room * k, dst_.staged_bytes * mb, dst_.skipped_bytes * mb, dst_.live_bytes * mb, dst_.ns * k / 1e6,
+                     (unsigned long long)(diff_table_bytes >> 20));
+                dst_ = DiffStats{};
             }
             if (!gpu_over_by_pool.empty()) {   // (relink, RX_VK_PAGES_GPU: which pools those pages are in)
                 std::vector<std::pair<int64_t, uint64_t>> top;
