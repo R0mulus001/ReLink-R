@@ -1147,7 +1147,11 @@ void cap_buf_free(VkBuffer buffer, VmaAllocation alloc, void* map, uint64_t size
         cap_free.push_back({buffer, alloc, map, size});
         cap_free_bytes += size;
     } else {
-        destroy_buffer(buffer, alloc);
+        // (0.7.9.4) on the reaper, as the images: a vmaDestroyBuffer of a capture buffer is a driver call of a millisecond and
+        // more, made here under the pools' lock at an arrival's burst of captures. The GPU is done with it already
+        static const bool here = getenv("RX_VK_CAP_FREE_HERE") != nullptr;
+        if (here) destroy_buffer(buffer, alloc);
+        else reap([buffer, alloc] { destroy_buffer(buffer, alloc); });
     }
 }
 void cap_buf_retire(std::map<uint32_t, CapBuf>::iterator it) {

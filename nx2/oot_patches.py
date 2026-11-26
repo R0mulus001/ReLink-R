@@ -221,6 +221,30 @@ def patch_names(s):
     return s[:at] + body + s[end:]
 
 
+# (relink, 0.7.9.4) OoT's OptimizeChangeBank update (f_832b9880): its pick of the neighbouring area to get ready (w21) goes
+# through host/oot_ocb.c before the code that asks for it and lets the others go (L_832b9dc8, inside the function only)
+OCB_HEAD = "void f_832b9880(Ctx *__restrict A64_NOESC c) {\n"
+OCB_ANCHOR = "L_832b9dc8:;\n"
+OCB_CALL = ("    { extern uint64_t hos_oot_ocb_hold(Ctx *, uint64_t, uint64_t); "
+            "c->x[21] = hos_oot_ocb_hold(c, c->x[19], c->x[21]); }   /* (nx2/oot_patches.py: host/oot_ocb.c) */\n")
+
+
+def patch_ocb(s):
+    """The neighbouring area's hold in f_832b9880 (the supported build's address). None when the function is not in this
+    file, is patched already, or its place is not there once"""
+    at = s.find(OCB_HEAD)
+    if at < 0:
+        return None
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # (python -I leaves the script folder off)
+    import lifted_c
+    m = lifted_c.HEAD.search(s, at + len(OCB_HEAD))
+    end = m.start() if m else len(s)
+    body = s[at:end]
+    if OCB_CALL in body or body.count(OCB_ANCHOR) != 1 or "c->x[21]" not in body:
+        return None
+    return s[:at] + body.replace(OCB_ANCHOR, OCB_ANCHOR + OCB_CALL, 1) + s[end:]
+
+
 MENU_TICK_HEAD = "void f_802f1380(Ctx *__restrict A64_NOESC c) {\n"
 
 
@@ -245,33 +269,15 @@ class ExefsModConflict(SystemExit):
 FUNCS = {"dynamic resolution branch": "f_80825aa0", "text speed block": "f_80b1e140", "fixed path's scale": "f_831f3200",
          "menu screens' update": "f_802f1380", "player heart protection": "f_804bd8c0", "player flight": "f_82c415e0",
          "player flight rotation": "f_806d2530", "free camera": "f_804e48c0", "zstd sequence loop": "f_801102e0",
-         "name searches": "f_805aeea0", "map preload hold": "f_832b9880"}
+         "name searches": "f_805aeea0", "neighbouring area's hold": "f_832b9880"}
 # (the two ReLink runs natively, host/zstd_native.c and host/names_native.c: in a function a patch changes they are left out
 # even where their text is found, or the host's code would run in place of the patched one)
 NATIVE = {"zstd sequence loop": "host/zstd_native.c", "name searches": "host/names_native.c"}
 
 
-# (ReLink-R 0.0.5, from Longshot c88f70440 by SadTransGirl, #1814, as HeyListen ported it) The OptimizeChangeBank preload
-# manager's update, f_832b9880: at its label L_832b9dc8 the unit it chose is in x21 (bit 31 of w21: none) and the manager in
-# x19; the choice goes through hos_oot_ocb_pick (host/ocb_hold.c, host/oot_ocb_hold.h) before the update tests it, so a choice
-# that only flickers between two neighbouring maps (Castle Town's market, as Link turns) no longer cancels and restarts the
-# map's loading each time. A line after the label, once (HOS_OCB_HOLD_MS=0: the game's own choice)
-OCB_HEAD = "void f_832b9880(Ctx *__restrict A64_NOESC c) {"
-OCB_ANCHOR = re.compile(r"(L_832b9dc8:;[^\n]*\n)([ \t]*if \(\(\(c->x\[21\] >> 31\) & 1\)\) \{[^\n]*goto L_832b9e0c;[^\n]*\n)")
-OCB_LINE = "    c->x[21] = hos_oot_ocb_pick(c, c->x[19], c->x[21]);   /* (nx2/oot_patches.py: the map preload hold) */\n"
-
-
-def patch_ocb_hold(source):
-    start = source.find(OCB_HEAD)
-    if start < 0:
-        return None
-    end = source.find("\n}", start)
-    body = source[start:end]
-    if end < 0 or len(OCB_ANCHOR.findall(body)) != 1:
-        return None
-    body = OCB_ANCHOR.sub(lambda m: m.group(1) + OCB_LINE + m.group(2), body, count=1)
-    return (source[:start] + body + source[end:]).replace(
-        '#include "a64.h"\n', '#include "a64.h"\nextern uint64_t hos_oot_ocb_pick(Ctx *c, uint64_t mgr, uint64_t chosen);\n', 1)
+# (ReLink-R 0.0.13) ReLink-R 0.0.5's own patch of this place (Longshot c88f70440 by SadTransGirl, #1814, via HeyListen:
+# hos_oot_ocb_pick, host/ocb_hold.c) is replaced by upstream 0.7.9.4's patch_ocb above; host/oot_ocb.c hands the pick to
+# the old rule with HOS_OCB_RULE=0
 
 
 def mod_note(notes, modded, func, text):
@@ -304,7 +310,7 @@ def apply(gen, *, protect_hearts=False, required=False, modded=None, notes=None)
         done["free camera"] = 0
         done["zstd sequence loop"] = 0
         done["name searches"] = 0
-        done["map preload hold"] = 0
+        done["neighbouring area's hold"] = 0
     for path in sorted(glob.glob(os.path.join(gen, "code_*.c"))):
         with open(path, encoding="utf-8", newline="") as f:
             s = f.read()
@@ -358,11 +364,11 @@ def apply(gen, *, protect_hearts=False, required=False, modded=None, notes=None)
             out = names
             done["name searches"] += 1
             print("oot_patches: native name searches in", os.path.basename(path))
-        ocb = patch_ocb_hold(out) if protect_hearts and FUNCS["map preload hold"] not in (modded or {}) else None
+        ocb = patch_ocb(out) if protect_hearts and FUNCS["neighbouring area's hold"] not in (modded or {}) else None   # (ReLink-R: not over an exefs mod)
         if ocb is not None:
             out = ocb
-            done["map preload hold"] += 1
-            print("oot_patches: the map preload hold in", os.path.basename(path))
+            done["neighbouring area's hold"] += 1
+            print("oot_patches: the neighbouring area's hold in", os.path.basename(path))
         if out != s:
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(out)

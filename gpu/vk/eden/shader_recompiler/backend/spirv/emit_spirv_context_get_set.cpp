@@ -566,8 +566,14 @@ void EmitSetOFlag(EmitContext&) {
     throw NotImplementedException("SPIR-V Instruction");
 }
 
+Id MeshFallbackSlot(EmitContext& ctx, Id workgroup);   // (emit_spirv_mesh.cpp)
 Id EmitWorkgroupId(EmitContext& ctx) {
-    return ctx.OpLoad(ctx.U32[3], ctx.workgroup_id);
+    const Id id{ctx.OpLoad(ctx.U32[3], ctx.workgroup_id)};
+    // (relink, 0.7.9.4) a task fallback's mesh workgroup: its slot, the compacted dispatch's list read (MeshFallbackSlot)
+    if (ctx.stage != Stage::Mesh || !ctx.mesh_fallback || !ctx.runtime_info.mesh_fallback_task) {
+        return id;
+    }
+    return ctx.OpCompositeInsert(ctx.U32[3], MeshFallbackSlot(ctx, ctx.OpCompositeExtract(ctx.U32[1], id, 0U)), id, 0U);
 }
 
 Id EmitLocalInvocationId(EmitContext& ctx) {

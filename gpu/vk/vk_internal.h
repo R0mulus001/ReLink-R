@@ -320,6 +320,17 @@ bool create_image(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& al
 void destroy_image(VkImage image, VmaAllocation allocation);
 /// (relink) fn on the thread that destroys images, in order (vk_vma.cpp): a driver call the render thread need not wait for
 void reap(std::function<void()> fn);
+/// (relink, 0.7.9.4) the texture decoders' compute pipelines, made at the start (vk_texture.cpp)
+void texture_pipelines_ahead();
+/// (relink, 0.7.9.4) an image over the memory of another's allocation (vk_vma.cpp)
+bool create_aliasing_image(VmaAllocation over, const VkImageCreateInfo& ci, VkImage& image);
+/// (relink, 0.7.9.4) A submit or a present under way (vk_vma.cpp): the reaper lets the driver have it first. DriverTurn t; around
+/// each vkQueueSubmit2 / vkQueuePresentKHR of the frame's path
+extern std::atomic<int> driver_turns;
+struct DriverTurn {
+    DriverTurn() { driver_turns.fetch_add(1, std::memory_order_relaxed); }
+    ~DriverTurn() { driver_turns.fetch_sub(1, std::memory_order_release); }
+};
 /// What an allocation really takes (VkMemoryRequirements.size: padding, alignment, the driver's metadata), 0 for none
 uint64_t allocation_size(VmaAllocation allocation);
 /// (dedicated: its own memory object, not a share of a 64 MB block: for the 16 to 32 MB ones that fit two to a block and leave

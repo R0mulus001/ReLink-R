@@ -18,6 +18,7 @@
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 
 namespace Shader::Backend::SPIRV {
+Id MeshFallbackSlot(EmitContext& ctx, Id workgroup);   // (below the anonymous namespace)
 namespace {
 void Barrier(EmitContext& ctx) {
     ctx.OpControlBarrier(ctx.Const(static_cast<u32>(spv::Scope::Workgroup)),
@@ -153,7 +154,7 @@ Id BufferWord(EmitContext& ctx, u32 member, Id word) {
 }
 
 Id WorkgroupId(EmitContext& ctx) {
-    return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0U);
+    return MeshFallbackSlot(ctx, ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0U));
 }
 
 /// Runs body once for each index invocation, invocation + threads, ... below count.
@@ -402,6 +403,18 @@ void MeshEpilogue(EmitContext& ctx) {
 }
 } // Anonymous namespace
 
+/// (relink, 0.7.9.4) A mesh workgroup of the task fallback: its slot. The mesh dispatch runs only the slots their task workgroup
+/// started, listed after the payloads by ReLink's compaction (vk_mesh_split.cpp): workgroup k runs the k-th listed slot. The
+/// mesh workgroups of the slots a task did not start ran the whole program for nothing (1.8 ms of a Kakariko frame's mesh
+/// dispatches, forced fallback on an RTX 3060 Ti), and read payloads cleared for them at each batch
+Id MeshFallbackSlot(EmitContext& ctx, Id workgroup) {
+    if (ctx.stage != Stage::Mesh || !ctx.mesh_fallback || !ctx.runtime_info.mesh_fallback_task) {
+        return workgroup;
+    }
+    const Id at{ctx.OpIAdd(ctx.U32[1], ctx.Const(MESH_FALLBACK_CAPACITY * (1U + ctx.mesh_info.payload_words)), workgroup)};
+    return ctx.OpLoad(ctx.U32[1], BufferWordAt(ctx, PushU64(ctx, ctx.mesh_fallback_payload_member_index), at));
+}
+
 void EmitMeshFallbackVertexBody(EmitContext& ctx) {
     // (the fragment stage's inputs for the mesh program's per-primitive generics are Flat: the generated vertex
     // stage's outputs must match, and DefineOutputs only knows the stores, not which of them are per-primitive)
@@ -458,6 +471,17 @@ void EmitMeshFallbackVertexBody(EmitContext& ctx) {
     const Id corner{ctx.OpUMod(ctx.U32[1], within, ctx.Const(corners))};
     const Id count{ctx.OpLoad(
         ctx.U32[1], BufferWord(ctx, ctx.mesh_fallback_records_member_index, slot))};
+    // (relink, 0.7.9.4) A vertex past its workgroup's primitive count reads nothing of its record: it is put outside the clip
+    // volume at once. The draw asks for every corner each slot may hold (~380 a slot on Kakariko's programs, the capacity
+    // 384), and each of those read its whole record before the count was looked at
+    const Id dead{ctx.OpUGreaterThanEqual(ctx.U1, primitive, count)};
+    If(ctx, dead, [&] {
+        StorePosition(ctx, 0, ctx.f32_zero_value);
+        StorePosition(ctx, 1, ctx.f32_zero_value);
+        StorePosition(ctx, 2, ctx.f32_zero_value);
+        StorePosition(ctx, 3, ctx.Const(-1.0f));
+    });
+    If(ctx, ctx.OpLogicalNot(ctx.U1, dead), [&] {
     const Id record{ctx.OpIAdd(ctx.U32[1], ctx.Const(MESH_FALLBACK_CAPACITY),
                                ctx.OpIMul(ctx.U32[1],
                                           ctx.OpIAdd(ctx.U32[1],
@@ -503,20 +527,19 @@ void EmitMeshFallbackVertexBody(EmitContext& ctx) {
             StorePosition(ctx, element, position[element]);
         }
     }
-    // (a record past the workgroup's primitive count, or one no mesh workgroup wrote: outside the clip volume)
-    If(ctx, ctx.OpLogicalOr(ctx.U1, ctx.OpUGreaterThanEqual(ctx.U1, primitive, count),
-                            ctx.OpIEqual(ctx.U1, valid, ctx.u32_zero_value)),
-       [&] {
-           StorePosition(ctx, 0, ctx.f32_zero_value);
-           StorePosition(ctx, 1, ctx.f32_zero_value);
-           StorePosition(ctx, 2, ctx.f32_zero_value);
-           StorePosition(ctx, 3, ctx.Const(-1.0f));
-       });
+    // (a record no mesh workgroup wrote: outside the clip volume)
+    If(ctx, ctx.OpIEqual(ctx.U1, valid, ctx.u32_zero_value), [&] {
+        StorePosition(ctx, 0, ctx.f32_zero_value);
+        StorePosition(ctx, 1, ctx.f32_zero_value);
+        StorePosition(ctx, 2, ctx.f32_zero_value);
+        StorePosition(ctx, 3, ctx.Const(-1.0f));
+    });
+    });
 }
 
 Id EmitIsbeRead(EmitContext& ctx, Id address) {
-    const Id workgroup{
-        ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0U)};
+    const Id workgroup{MeshFallbackSlot(
+        ctx, ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0U))};
     if (ctx.stage == Stage::Task) {
         if (ctx.wants_mesh_first && Sirit::ValidId(ctx.rescaling_push_constants)) {
             // (relink) + the draw's first workgroup: NVN draws [first, first + count). Without it every draw began at 0: the

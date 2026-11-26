@@ -582,10 +582,26 @@ static int shadow_bucket_layout(const nvn_texdesc *d, nvn_texlayout *out) {
         step = e && *e ? atoi(e) : 384;
         if (step < 0) step = 0;
     }
-    if (!step || d->target != NVN_TEXTURE_TARGET_2D || d->format != 0x34 || d->levels != 1 || d->depth > 1 ||
-        d->width != d->height || d->width <= 384 || d->width > 1920)
+    /* (0.7.9.4) HOS_SHADOW_BUCKET_ALL=1: every square depth format (0x32 to 0x36) and the small sides too, 64 to 384 up to the
+       next of 96, 128, 192, 256, 384 (other objects' maps follow the camera the same way, in a smaller range) */
+    static int all = -1;
+    if (all < 0) {
+        const char *e = getenv("HOS_SHADOW_BUCKET_ALL");
+        all = e && atoi(e) ? 1 : 0;
+    }
+    const int depth_fmt = all ? d->format >= 0x32 && d->format <= 0x36 : d->format == 0x34;
+    if (!step || d->target != NVN_TEXTURE_TARGET_2D || !depth_fmt || d->levels != 1 || d->depth > 1 ||
+        d->width != d->height || d->width <= (all ? 64u : 384u) || d->width > 1920)
         return 0;
     uint32_t side = (d->width + (uint32_t)step - 1) / (uint32_t)step * (uint32_t)step;
+    if (all && d->width <= 384) {
+        static const uint32_t ladder[] = {96, 128, 192, 256, 384};
+        for (unsigned i = 0; i < sizeof ladder / sizeof *ladder; i++)
+            if (d->width <= ladder[i]) {
+                side = ladder[i];
+                break;
+            }
+    }
     if (side > 1920) side = 1920;
     if (side == d->width) return 0;
     nvn_texdesc slot = *d;
@@ -722,13 +738,17 @@ NV(nvnTextureInitialize) {
            (the frame records from x29), then every 600 of them how many and how many distinct sides */
         static int on = -1;
         if (on < 0) on = getenv("RX_NVN_LOG_SQUARE") != NULL;
-        if (on && o->d.width == o->d.height && o->d.width >= 128 && o->d.width <= 4096 && (o->d.width & 63)) {
+        if (on && o->d.width == o->d.height && o->d.width >= 64 && o->d.width <= 4096 && (o->d.width & 63)) {
             static volatile LONG n;
             static uint8_t seen[4097];
             static int distinct;
             const LONG k = InterlockedIncrement(&n);
             if (!seen[o->d.width]) seen[o->d.width] = 1, distinct++;
-            if (k <= 60) {
+            static volatile LONG nd;   /* (0.7.9.4: the depth formats' own, 0x31 to 0x36, for the shadow bucket) */
+            const int depth_fmt = o->d.format >= 0x31 && o->d.format <= 0x36;
+            const LONG kd = depth_fmt ? InterlockedIncrement(&nd) : 0;
+            if (depth_fmt && kd % 300 == 0) hos_log("nvn: square depth textures of odd sides: %ld made", (long)kd);
+            if (getenv("RX_NVN_LOG_SQUARE")[0] == '2' ? depth_fmt && kd <= 60 : k <= 60) {
                 uint64_t fp = c->x[29], ra[6] = {0};
                 for (int i = 0; i < 6 && fp > 0x10000 && fp < VBASE && !(fp & 7); i++) {
                     ra[i] = G64(fp + 8);
