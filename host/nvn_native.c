@@ -1090,9 +1090,12 @@ static void held_init(void) {
     if (!held_ready) { InitializeCriticalSection(&held_cs); InitializeCriticalSection(&flush_cs); held_ready = 1; }
     if (hold_on < 0) {
         const char *e = getenv("HOS_NVN_HOLD");
-        hold_on = e && *e ? atoi(e) : 2;
-        if (hold_on < 0 || hold_on > 2) hold_on = 2;
-        hos_log("nvn: submits held: %s (HOS_NVN_HOLD=%d; =0: none held, as 0.0.8)", hold_on == 2 ? "the main thread's, replayed on a "
+        /* (ReLink-R 0.0.11) off by default again: on 0.0.10, with the held submits' thread doing the work (10779 of 10800 flushes),
+           the Market went 37.8 -> 35.5 fps (median of the busy windows), memory sync 12.6 -> 15.3 ms, 124 frames over 40 ms, and the
+           owner saw black patches (the capture taken after the game had written the next frame's data). HOS_NVN_HOLD=2: on */
+        hold_on = e && *e ? atoi(e) : 0;
+        if (hold_on < 0 || hold_on > 2) hold_on = 0;
+        hos_log("nvn: submits held: %s (HOS_NVN_HOLD=%d; =2: the main thread's on a thread of their own)", hold_on == 2 ? "the main thread's, replayed on a "
                 "host thread of their own" : hold_on == 1 ? "all, until a flush" : "none", hold_on);
         if (hold_on == 2) {
             hold_event = CreateEventW(NULL, FALSE, FALSE, NULL);

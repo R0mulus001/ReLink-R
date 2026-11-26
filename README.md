@@ -5,6 +5,9 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.11-dev**: back to 0.0.8's way of submitting: the separate submit thread of 0.0.9/0.0.10 is off by default. Measured on
+  0.0.10 it made the Market slower (35.5 against 37.8 FPS), stuttery, and showed black patches (`HOS_NVN_HOLD=2` turns it on).
+  The lighter game barriers stay off, as in 0.0.10. The HeyListen port is stopped: its second stage needs this one.
 - **0.0.10-dev**: fixes 0.0.9. The game's main thread now really hands its submits to their own thread: 0.0.9 still did the work
   itself every time the game flushed, and then waited for the other render thread, which caused stutter. The lighter game
   barriers of 0.0.7/0.0.8 are off by default (no gain measured, likely cause of flicker in the Treasure Chest Shop);
