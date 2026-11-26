@@ -1108,6 +1108,22 @@ static void oot_capture_tick(Ctx *c, uint64_t actor, int64_t now) {
     rx_option_set(OOT_TP_CAPTURE_ID, place);
 }
 
+/* (ReLink-R 0.0.12, the 60 FPS plan's Phase 0) HOS_MAP_LOG (on; =0 off): the map Link is in (Sequence_CurrentBanc, as the age
+   toggle reads it), looked at once a second from the player's update and logged when it changes ("oot: map now Market_Child"),
+   so tools/bench/relink_log.py can tell the Market's frames from Lon Lon Ranch's. Read only: nothing of the game's is changed */
+static void oot_map_note(Ctx *c, int64_t now) {
+    static int on = -1;
+    static int64_t last;
+    static char seen[80];
+    if (on < 0) on = !getenv("HOS_MAP_LOG") || atoi(getenv("HOS_MAP_LOG")) != 0;
+    if (!on || (last && now - last < 1000000000LL)) return;
+    last = now;
+    char map[80];
+    if (!oot_gamedata_string(c, 0x1d6189dau, map, sizeof map) || !map[0] || !strcmp(map, seen)) return;   /* Sequence_CurrentBanc */
+    hos_log("oot: map now %s (was %s)", map, seen[0] ? seen : "none");
+    snprintf(seen, sizeof seen, "%s", map);
+}
+
 static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components) {
     int rx_option(int id, int otherwise);
     static uint64_t flying_actor, marked_actor, marked_controller;
@@ -1122,6 +1138,7 @@ static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components
     int action = rx_option(HOS_OPT_CHEAT_ACTION, 0);
     if (!action) action = __atomic_exchange_n(&hos_oot_live_action, 0, __ATOMIC_RELAXED);
     oot_teleport_followup(c);
+    oot_map_note(c, now);   /* (ReLink-R 0.0.12, HOS_MAP_LOG) */
     oot_inventory_refresh(c, now);
     oot_capture_tick(c, actor, now);   /* (relink: the Travel page's pictures) */
     if (action >= OOT_CHEAT_ITEM_ACTION && action < OOT_CHEAT_ITEM_ACTION + 256 * (int)OOT_ITEM_COUNT) {
