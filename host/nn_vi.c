@@ -718,9 +718,22 @@ void hos_vi_native_presented(void) {
     /* (present-to-present intervals of the window, in buckets: which frames miss their vsync) */
     static int64_t last_present;
     static int hist[6];
+    /* (ReLink-R 0.0.12, the 60 FPS plan's Phase 0) HOS_FRAME_STATS (on; =0 off): the window's intervals by millisecond too
+       (floored, 100 and over in one bin), the frames over 20 and 50 ms and the longest, for the plan's acceptance numbers
+       (1 % low, frames over 20 ms, none over 50 ms): the buckets above have no edge at 20 or 50 ms.
+       tools/bench/relink_log.py merges the bins of a scene's windows */
+    static int frame_stats = -1, fine[101], over20, over50;
+    static int64_t longest;
+    if (frame_stats < 0) frame_stats = !getenv("HOS_FRAME_STATS") || atoi(getenv("HOS_FRAME_STATS")) != 0;
     if (last_present) {
         const int64_t d = now - last_present;
         hist[d < 15500000 ? 0 : d < 17800000 ? 1 : d < 22000000 ? 2 : d < 30000000 ? 3 : d < 40000000 ? 4 : 5]++;
+        if (frame_stats) {
+            const int64_t ms = d / 1000000;
+            fine[ms > 100 ? 100 : ms < 0 ? 0 : ms]++;
+            over20 += d > 20000000, over50 += d > 50000000;
+            if (d > longest) longest = d;
+        }
     }
     {   /* (relink) HOS_PRESENT_LOG=<file>: every present's time (ns since the first), one per line, for the stutter's pattern */
         static FILE *plog;
@@ -745,6 +758,27 @@ void hos_vi_native_presented(void) {
         hos_log("vi: present intervals: <15.5 ms %d, 15.5-17.8 %d, 17.8-22 %d, 22-30 %d, 30-40 %d, over 40 %d", hist[0],
                 hist[1], hist[2], hist[3], hist[4], hist[5]);
         memset(hist, 0, sizeof hist);
+        if (frame_stats) {   /* (ReLink-R 0.0.12, HOS_FRAME_STATS) */
+            int total = 0, acc = 0, p99 = 0, k = 0;
+            char bins[1024];
+            bins[0] = 0;
+            for (int i = 0; i <= 100; i++) total += fine[i];
+            for (int i = 100; i >= 0 && total; i--) {   /* (the 99th percentile: the bin where the slowest 1 % is reached) */
+                acc += fine[i];
+                if (acc * 100 >= total) {
+                    p99 = i + 1;
+                    break;
+                }
+            }
+            for (int i = 0; i <= 100 && k < (int)sizeof bins - 16; i++)
+                if (fine[i] && i == 100) k += snprintf(bins + k, sizeof bins - k, " 100+:%d", fine[i]);
+                else if (fine[i]) k += snprintf(bins + k, sizeof bins - k, " %d:%d", i, fine[i]);
+            if (total)
+                hos_log("vi: frame times: 1%% low %.1f fps (99th percentile under %d ms), %d over 20 ms, %d over 50 ms, the longest "
+                        "%.1f ms; by ms:%s", 1000.0 / p99, p99, over20, over50, longest / 1e6, bins);
+            memset(fine, 0, sizeof fine);
+            over20 = over50 = 0, longest = 0;
+        }
         window_start = now, frames_in_window = 0;
         const uint64_t pacer = hos_mkw_pacer, freq = pacer ? G64(0x837de940) : 0;   /* (MKW only: nvn_native.c) */
         if (pacer && freq)

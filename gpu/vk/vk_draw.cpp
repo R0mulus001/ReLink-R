@@ -6435,6 +6435,8 @@ bool mesh_indirect_convert(VkCommandBuffer cmd, const DrawArgs& d) {
     if (!mesh_ring_slot(n, &off, &start)) return false;
     st_mc[kMcOne].fetch_add(1, std::memory_order_relaxed);
     end_pass(cmd);
+    // (ReLink-R 0.0.12, from HeyListen's vk_draw.cpp: RX_VK_PASS_TIMING times the conversion with its barriers, as one span)
+    GprofSpan gp(cmd, "meshconv (an indirect mesh draw's arguments -> {count, 1, 1}, with its barriers)");
     thread_local std::vector<VkBufferCopy> regions;
     regions.resize(n);
     for (uint32_t i = 0; i < n; i++) regions[i] = {args.offset + (uint64_t)i * stride + 4 * word, off + (uint64_t)i * mesh_conv::kRecord, 4};
@@ -6516,6 +6518,8 @@ void mesh_conv_batch(VkCommandBuffer cmd, const mesh_conv::Item* items, size_t n
         mesh_ring_pos.store(mesh_ring_at, std::memory_order_relaxed);
     }
     end_pass(cmd);   // (ended by the game's barrier already)
+    // (ReLink-R 0.0.12, from HeyListen's vk_draw.cpp: RX_VK_PASS_TIMING times the batch with its barriers, as one span)
+    GprofSpan gp(cmd, "meshconv batch (the indirect mesh draws' arguments after a barrier of the game's, with its barriers)");
     full_barrier(cmd, "barrier (before the indirect mesh draws' arguments)");   // (left out: the game's is right before it)
     thread_local std::vector<VkBufferCopy> regions;
     for (const Copy& c : copies) {

@@ -436,17 +436,71 @@ VkQueryPool ts_pool = VK_NULL_HANDLE;
 bool ts_pending[kRecordings];
 int64_t st_gpu_ns, st_gpu_max_ns;
 std::atomic<int64_t> gpu_ns_total{0};   // (st_gpu_ns for another thread: the detailed FPS counter's GPU time)
+// (ReLink-R 0.0.12, the 60 FPS plan's Phase 0; the idea and the log line's form from HeyListen 6d8add8e, TICK-053) The upload
+// command buffers' GPU time, and the queue's idle time: every recording's busy span on the GPU (its upload command buffer's
+// start, else its own, to its end), merged, and the gaps between them summed at each report (gpu_gaps_report): time the queue
+// had none of the recordings' work, because the CPU had not sent the next yet (or the present's blit, ~0.1 ms, ran). Merged
+// at the report rather than in collection order, so recordings collected out of their queue order (a parallel replay's
+// segments) count right. Gaps of 2 s and more (loading) are left out. RX_VK_GPU_GAPS=0: off (the GPU time line as in 0.0.11)
+bool gpu_gaps_on() {
+    static const bool on = !getenv("RX_VK_GPU_GAPS") || atoi(getenv("RX_VK_GPU_GAPS")) != 0;
+    return on;
+}
+VkQueryPool ts_up_pool = VK_NULL_HANDLE;
+bool ts_up_begun[kRecordings], ts_up_pending[kRecordings];
+int64_t st_gpu_up_ns;
+std::mutex ts_spans_mu;
+std::vector<std::pair<uint64_t, uint64_t>> ts_spans;   // (busy spans collected since the last report, GPU ticks)
+uint64_t ts_spans_last_end;                           // (the last report's merged end)
 void gpu_time_collect(Recording& r) {
+    const bool up = ts_up_pending[r.slot];
+    ts_up_pending[r.slot] = false;
     if (!ts_pool || !ts_pending[r.slot]) return;
     ts_pending[r.slot] = false;
     uint64_t t[2] = {0, 0};
     if (vkGetQueryPoolResults(dev.device, ts_pool, 2 * r.slot, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
         return;
     if (t[1] <= t[0]) return;
-    const int64_t ns = (int64_t)((t[1] - t[0]) * (double)dev.props.limits.timestampPeriod);
+    const double period = (double)dev.props.limits.timestampPeriod;
+    const int64_t ns = (int64_t)((t[1] - t[0]) * period);
     st_gpu_ns += ns;
     st_gpu_max_ns = std::max(st_gpu_max_ns, ns);
     gpu_ns_total.fetch_add(ns, std::memory_order_relaxed);
+    if (!gpu_gaps_on()) return;
+    uint64_t start = t[0], end = t[1];
+    uint64_t u[2] = {0, 0};
+    if (up && ts_up_pool &&
+        vkGetQueryPoolResults(dev.device, ts_up_pool, 2 * r.slot, 2, sizeof u, u, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+        u[1] > u[0] && u[0] <= t[0]) {
+        st_gpu_up_ns += (int64_t)((u[1] - u[0]) * period);
+        start = u[0], end = std::max(end, u[1]);
+    }
+    std::lock_guard lk(ts_spans_mu);
+    if (ts_spans.size() < 65536) ts_spans.push_back({start, end});
+}
+/// (ReLink-R 0.0.12) The queue's idle time since the last call: the busy spans merged, the gaps between them (and the gap from
+/// the last call's end to the first) summed, in ns; longest: the longest gap; busy: the merged busy time
+void gpu_gaps_report(int64_t* idle, int64_t* longest, int64_t* busy) {
+    *idle = *longest = *busy = 0;
+    std::vector<std::pair<uint64_t, uint64_t>> v;
+    {
+        std::lock_guard lk(ts_spans_mu);
+        v.swap(ts_spans);
+    }
+    if (v.empty()) return;
+    std::sort(v.begin(), v.end());
+    const double period = (double)dev.props.limits.timestampPeriod;
+    uint64_t end = ts_spans_last_end;
+    for (const auto& [s, e] : v) {
+        if (end && s > end) {
+            const int64_t gap = (int64_t)((s - end) * period);
+            if (gap < 2000000000LL) *idle += gap, *longest = std::max(*longest, gap);
+        }
+        const uint64_t from = end && s < end ? end : s;
+        if (e > from) *busy += (int64_t)((e - from) * period);
+        if (e > end) end = e;
+    }
+    ts_spans_last_end = end;
 }
 }   // namespace (the accessor below is the FPS counter's: vk_menu.cpp)
 int64_t replay_gpu_ns_total() { return gpu_ns_total.load(std::memory_order_relaxed); }
@@ -467,6 +521,28 @@ void gpu_time_end(Recording& r) {
     if (!ts_pool) return;
     vkCmdWriteTimestamp2(r.cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ts_pool, 2 * r.slot + 1);
     ts_pending[r.slot] = true;
+}
+/// (ReLink-R 0.0.12, RX_VK_GPU_GAPS) The recording's upload command buffer, just begun, takes its start timestamp (it resets
+/// its own queries: it is not always sent); gpu_time_upload_end its end, before it is ended, when it is sent (sent: uploads)
+void gpu_time_upload_begin(Recording& r) {
+    ts_up_begun[r.slot] = false;
+    if (!gpu_gaps_on() || !ts_pool) return;
+    if (!ts_up_pool) {
+        VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        qi.queryCount = 2 * kRecordings;
+        if (vkCreateQueryPool(dev.device, &qi, nullptr, &ts_up_pool) != VK_SUCCESS) ts_up_pool = VK_NULL_HANDLE;
+        if (!ts_up_pool) return;
+    }
+    vkCmdResetQueryPool(r.upload, ts_up_pool, 2 * r.slot, 2);
+    vkCmdWriteTimestamp2(r.upload, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, ts_up_pool, 2 * r.slot);
+    ts_up_begun[r.slot] = true;
+}
+void gpu_time_upload_end(Recording& r, bool sent) {
+    if (!ts_up_begun[r.slot]) return;
+    ts_up_begun[r.slot] = false;
+    if (sent) vkCmdWriteTimestamp2(r.upload, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, ts_up_pool, 2 * r.slot + 1);
+    ts_up_pending[r.slot] = sent;
 }
 
 // Real occlusion counts (on unless RX_VK_OCC_QUERIES=0; from jordanella's draft). Ocarina of Time
@@ -676,6 +752,7 @@ Recording& begin_recording(uint64_t value) {
     checkpoint_note(r.upload, value, 'S', "its uploads, VERY FIRST command (before anything else in it)");
     checkpoint_note(r.cmd, value, 'S', "its draws, VERY FIRST command (before its timestamp reset)");
     gpu_time_begin(r);
+    gpu_time_upload_begin(r);   // (ReLink-R 0.0.12, RX_VK_GPU_GAPS)
     gprof_begin_recording(r.slot, r.cmd, r.upload);
     r.value = value;
     value_seen[value & 255].store(value, std::memory_order_relaxed);   // (vk_value_is_mine)
@@ -693,6 +770,7 @@ void submit_recording(Recording& r, bool signal_value = true, uint64_t signal_at
     const bool uploads = texture_uploads_recorded();
     gprof_submitted(r.slot, uploads);
     gpu_time_end(r);
+    gpu_time_upload_end(r, uploads);   // (ReLink-R 0.0.12, RX_VK_GPU_GAPS)
     if (uploads) checkpoint_note(r.upload, r.value, 'F', "its uploads");
     checkpoint_note(r.cmd, r.value, 'F', "its draws and dispatches");
     vkEndCommandBuffer(r.upload);
@@ -2178,6 +2256,7 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkResetCommandPool(dev.device, j->r->upload_pool, 0);
         vkBeginCommandBuffer(j->r->upload, &bi);
+        gpu_time_upload_begin(*j->r);   // (ReLink-R 0.0.12, RX_VK_GPU_GAPS: the segment's uploads timed too)
         j->g = seg[k];
         j->order = base + k;
         j->index = (int)k;
@@ -2233,6 +2312,7 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
                 j->uploads = texture_uploads_recorded();
                 j->inits = texture_segment_end(j->index);   // (after its last new image)
                 texture_segment_worker(-1);
+                gpu_time_upload_end(*j->r, j->uploads);   // (ReLink-R 0.0.12, RX_VK_GPU_GAPS)
                 vkEndCommandBuffer(j->r->upload);
                 gpu_time_end(*j->r);   // (relink: see begin_segment_recording)
                 host_read_barrier(c);
@@ -3566,8 +3646,18 @@ void log_frame_stats() {
         }
         static int64_t l_gpu;
         static uint64_t l_made;
-        logf("vk: GPU time %.1f ms a frame (the longest submission %.1f ms); %.1f textures made a frame",
-             (st_gpu_ns - l_gpu) / 120.0 / 1e6, st_gpu_max_ns / 1e6, (texture_made() - l_made) / 120.0);
+        if (gpu_gaps_on()) {   // (ReLink-R 0.0.12, RX_VK_GPU_GAPS; the form of HeyListen's line, TICK-053, plus the busy share)
+            static int64_t l_up;
+            int64_t idle = 0, longest = 0, busy = 0;
+            gpu_gaps_report(&idle, &longest, &busy);
+            logf("vk: GPU time %.1f ms a frame (the longest submission %.1f ms), uploads %.1f ms, gaps between recordings %.1f ms "
+                 "(the longest %.1f), busy %.0f%%; %.1f textures made a frame",
+                 (st_gpu_ns - l_gpu) / 120.0 / 1e6, st_gpu_max_ns / 1e6, (st_gpu_up_ns - l_up) / 120.0 / 1e6, idle / 120.0 / 1e6,
+                 longest / 1e6, busy + idle > 0 ? 100.0 * (double)busy / (double)(busy + idle) : 0.0, (texture_made() - l_made) / 120.0);
+            l_up = st_gpu_up_ns;
+        } else
+            logf("vk: GPU time %.1f ms a frame (the longest submission %.1f ms); %.1f textures made a frame",
+                 (st_gpu_ns - l_gpu) / 120.0 / 1e6, st_gpu_max_ns / 1e6, (texture_made() - l_made) / 120.0);
         {   // (issue 109: the movie networks too slow on this card: left out from now on, vk_draw.cpp movie_networks_slow)
             static const bool keep_all = getenv("RX_VK_NETWORK_KEEP") && !strcmp(getenv("RX_VK_NETWORK_KEEP"), "all");
             const double gpu_ms = (st_gpu_ns - l_gpu) / 120.0 / 1e6, draws = (d - l_d) / 120.0;

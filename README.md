@@ -5,6 +5,11 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.12-dev**: measuring only, no change to how the game runs. The log now says how long the graphics card sits idle
+  waiting for work each frame and how long its texture uploads take (`RX_VK_GPU_GAPS`), the frame times by millisecond every
+  5 s so the 1 % low and the frames over 20 and 50 ms can be read (`HOS_FRAME_STATS`), and which map Link is in
+  (`HOS_MAP_LOG`); pass timing (`RX_VK_PASS_TIMING`) also names the grass/foliage argument conversions. `tools/bench/relink_log.py`
+  turns a log into numbers per scene and compares runs. Each switch at 0 turns its part off.
 - **0.0.11-dev**: back to 0.0.8's way of submitting: the separate submit thread of 0.0.9/0.0.10 is off by default. Measured on
   0.0.10 it made the Market slower (35.5 against 37.8 FPS), stuttery, and showed black patches (`HOS_NVN_HOLD=2` turns it on).
   The lighter game barriers stay off, as in 0.0.10. The HeyListen port is stopped: its second stage needs this one.
