@@ -943,7 +943,7 @@ def write_cmap4(m, slots):
     return head + body, at
 
 
-def rebuild_cmap(cmap, slot_glyphs):
+def rebuild_cmap(cmap, slot_glyphs, extra=None):
     """the cmap with its format 4 subtables rebuilt so that each code point of slot_glyphs has its own glyph id slot,
     holding the glyph given; other subtables kept as they are. Returns it, every code point's glyph as the font had them,
     and the cmap offsets of the slots"""
@@ -962,6 +962,7 @@ def rebuild_cmap(cmap, slot_glyphs):
             if missing:
                 raise Unfit(f"U+{missing[0]:04X} is not in External's cmap")
             m.update(slot_glyphs)
+            m.update(extra or {})   # (ReLink-R 0.0.14: code points the font did not have, nx2/keyboard_prompts.py's keys)
             sub, at = write_cmap4(m, set(slot_glyphs))
             out += b"\0" * (-len(out) % 2)
             slots = {c: len(out) + a for c, a in at.items()}
@@ -1407,6 +1408,26 @@ def make(romfs, out):
             os.remove(path)
         print(f"button prompts: the ocarina's note buttons not made ({type(e).__name__}: {e}): they stay the Switch's",
               file=sys.stderr)
+    # (ReLink-R 0.0.14: the keyboard's keys, nx2/keyboard_prompts.py; without them Keyboard and Auto keep the game's own font)
+    try:
+        import keyboard_prompts
+        size, game_size, raised = keyboard_prompts.make(romfs, out, orig, wrap, dictionary)
+        print(f"button prompts: the keyboard's keys, {size} bytes (the game's font {game_size}"
+              f"{'; its size table raised: rsizetable.zs' if raised else ''}) in {out}", file=sys.stderr)
+        try:   # (the HUD cross's letters for the keyboard: without them they stay the Switch's)
+            kpath, kn = keyboard_prompts.make_keytex_keys(romfs, dictionary, out)
+            print(f"button prompts: the HUD cross's keys ({kn} masks) in {kpath}", file=sys.stderr)
+        except Exception as e:
+            if os.path.exists(os.path.join(out, "keytex_keys.bin")):
+                os.remove(os.path.join(out, "keytex_keys.bin"))
+            print(f"button prompts: the HUD cross's keys not made ({type(e).__name__}: {e}): they stay the Switch's",
+                  file=sys.stderr)
+    except Exception as e:
+        for name in ("keyboard.otf", "keyboard.txt", "rsizetable.zs"):   # (keyboard_prompts.FILES)
+            if os.path.exists(os.path.join(out, name)):
+                os.remove(os.path.join(out, name))
+        print(f"button prompts: the keyboard's keys not made ({type(e).__name__}: {e}): Keyboard and Auto show the "
+              f"Switch's", file=sys.stderr)
 
 
 def main(argv=None):

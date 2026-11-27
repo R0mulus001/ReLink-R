@@ -86,6 +86,7 @@ struct Texture {
     bool vw_listed = false;   // (in the list of GPU-written textures of virtual pools: texture_flush_to_guest)
     uint64_t prefetched_frame = 0;   // (relink, RX_VK_PREFETCH: the present it was made ahead at, 0: made by a draw)
     bool drawn = false;              // (and whether a draw used it since)
+    int keytex_gen = -1;       // (ReLink-R 0.0.14) one of the HUD cross's letters: the generation it was chosen at (prompt_tex_gen)
     bool keytex_wait = false;  // (relink) one of the HUD cross's letters, uploaded before its family was known (prompt_tex.h)
     std::unordered_map<uint64_t, VkImageView> views;
     // (relink, issue 21) a compressed image the game renders into through raw views (one texel a block): a plain image of

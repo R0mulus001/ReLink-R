@@ -2226,6 +2226,7 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     // (relink, 12/11: where a command buffer's time in segments goes: what is done here before the threads have anything,
     // how long the first takes to start, what they record, the submits, what follows)
     static double setup_ms, wake_ms, rec_sum_ms, rec_max_ms, last_ms, submit_ms, tail_ms;
+    static double presync_ms, presubmit_ms;   // (ReLink-R 0.0.14: of setup_ms, the mirrors' pre-sync and the part before's submit)
     const auto t_pre0 = std::chrono::steady_clock::now();
     const auto ms_since = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -2262,8 +2263,11 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
     Recording& r = *rec_cur;
     end_pass(r.cmd);
     full_barrier(r.cmd);
+    const auto t_ps0 = std::chrono::steady_clock::now();
     memory_sync_mirrors_before_segments();   // (in r's uploads, ahead of every segment)
+    const auto t_ps1 = std::chrono::steady_clock::now();
     submit_recording(r, false);
+    presync_ms += ms_since(t_ps0, t_ps1), presubmit_ms += ms_since(t_ps1, std::chrono::steady_clock::now());
     static uint64_t seq = 0;   // (the segments' order, across submissions: a recording's uploads precede it)
     const uint64_t base = ++seq;
     seq += seg.size();
@@ -2425,6 +2429,17 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
              "after %.2f ms, %.2f ms recorded in all (the longest segment %.2f ms), the last done at %.2f ms, the submits %.2f ms, "
              "%.2f ms here after", setup_ms / 240, wake_ms / 240, rec_sum_ms / 240, rec_max_ms / 240, last_ms / 240, submit_ms / 240,
              tail_ms / 240);
+        logf("vk: parallel replay, the part before the threads (ReLink-R 0.0.14): the mirrors' pre-sync %.2f ms, the part "
+             "before's submit %.2f ms, the rest %.2f ms (a command buffer)", presync_ms / 240, presubmit_ms / 240,
+             (setup_ms - presync_ms - presubmit_ms) / 240);
+        {
+            double pools, clean, walked, dirty, clean_ms, dirty_ms;
+            memory_presync_stats(&pools, &clean, &walked, &dirty, &clean_ms, &dirty_ms);
+            logf("vk: parallel replay, the mirrors' pre-sync (ReLink-R 0.0.14): %.1f pools synced, %.1f of them with no dirty page "
+                 "(%.2f ms), the others %.2f ms; %.0f pages walked in all syncs, %.0f dirty (a command buffer)", pools / 240,
+                 clean / 240, clean_ms / 240, dirty_ms / 240, walked / 240, dirty / 240);
+        }
+        presync_ms = presubmit_ms = 0;
         dry_ms = seg_ms = segs_n = wait_ms = locks_n = 0;
         setup_ms = wake_ms = rec_sum_ms = rec_max_ms = last_ms = submit_ms = tail_ms = 0;
     }

@@ -337,6 +337,10 @@ static void live_input(void) {
                 if (!strncmp(line, "!flasharm", 9)) rx_flash_dark_arm();
                 extern volatile int hos_oot_live_action;   /* host/hos_main.c: "!cheat <action>", as the Cheats page sends */
                 if (!strncmp(line, "!cheat ", 7)) __atomic_store_n(&hos_oot_live_action, atoi(line + 7), __ATOMIC_RELAXED);
+                /* (ReLink-R 0.0.14, a test's: "!device keys" / "!device pad": the device in use set as a press of it would set it,
+                   for Auto's prompts while the game runs, host/prompts.c; scripted presses count as neither) */
+                void hos_input_device_set(int d);
+                if (!strncmp(line, "!device ", 8)) hos_input_device_set(!strncmp(line + 8, "pad", 3) ? 2 : 1);
                 /* "!event <name>": the event the next teleports ask for instead of the map change (host/hos_main.c
                    oot_teleport, as HOS_OOT_TELEPORT_EVENT but changed in the middle of a run); "!event -": the map change again */
                 extern char hos_oot_live_event[96];
@@ -515,6 +519,20 @@ static void binds_load(void) {
     if (changed) hos_log("hid: %d controls from relink_options.ini", changed);
     InterlockedExchange(&state, 2);
 }
+/* (ReLink-R 0.0.14, host/prompts.c: Auto's prompts) the device in use: HOS_DEVICE_KEYS or HOS_DEVICE_PAD, the last that pressed
+   or moved something; 0 until one did */
+#define HOS_DEVICE_KEYS 1
+#define HOS_DEVICE_PAD 2
+static volatile LONG input_device;
+int hos_input_device(void) { return (int)InterlockedCompareExchange(&input_device, 0, 0); }
+void hos_prompts_device(int d);   /* prompts.c: Auto's HUD cross follows the device (a change only) */
+static void device_now(int d) {
+    if (InterlockedExchange(&input_device, d) != d) hos_prompts_device(d);
+}
+void hos_input_device_set(int d) {
+    device_now(d);
+    hos_log("hid: the device in use set to %s (a test's !device)", d == 2 ? "the controller" : "the keyboard");
+}
 int hos_binding(int set, int button, int slot) {
     binds_load();
     if (button < 0 || button >= (set == HOS_BIND_PAD ? HOS_SW_N : HOS_KEY_N) || slot < 0 || slot > 1)
@@ -568,6 +586,17 @@ static void xinput_load(int64_t now) {
     HMODULE x = LoadLibraryA("xinput1_4.dll");
     if (!x) x = LoadLibraryA("xinput9_1_0.dll");
     if (x) xinput_get = (XInputGetStateFn)GetProcAddress(x, "XInputGetState");
+}
+/* (ReLink-R 0.0.14, host/prompts.c: Auto button prompts) 1 when a controller is connected: an XInput pad in any slot, or a
+   controller SDL has open */
+int hos_pad_present(void) {
+    xinput_load(hos_now_ns());
+    for (DWORD p = 0; p < XUSER_MAX_COUNT && xinput_get; p++) {
+        XINPUT_STATE xs;
+        if (xinput_get(p, &xs) == ERROR_SUCCESS) return 1;
+    }
+    int hos_sdl_pad_count(void);   /* pad_sdl.c */
+    return hos_sdl_pad_count() > 0;
 }
 /* One pass over the slots that are due (each reader of xin_retry is the one asking thread) */
 static void xinput_poll(int64_t now) {
@@ -893,10 +922,16 @@ static void read_input(uint64_t *buttons, int32_t stick[4]) {
             *buttons |= pb;
             stick_max(stick, ps);
         }
+        /* (ReLink-R 0.0.14, host/prompts.c: Auto's prompts follow the device in use) a pad's button, or a stick past a
+           quarter of its way */
+        if (pb || abs(ps[0]) > 8192 || abs(ps[1]) > 8192 || abs(ps[2]) > 8192 || abs(ps[3]) > 8192)
+            device_now(HOS_DEVICE_PAD);
     }
     binds_load();   /* (the keys: key_default's, or relink_options.ini's; the mouse's buttons once its capture is known) */
     for (int i = 0; i < HOS_SW_N; i++)
-        if (bound_down(i, 0)) *buttons |= 1ULL << i;
+        if (bound_down(i, 0)) *buttons |= 1ULL << i, device_now(HOS_DEVICE_KEYS);
+    for (int i = HOS_SW_N; i < HOS_KEY_N; i++)   /* (ReLink-R 0.0.14: the movement and camera keys count as the keyboard in use) */
+        if (bound_down(i, 0) || bound_down(i, 1)) device_now(HOS_DEVICE_KEYS);
     const int captured = mouse_input(buttons, stick);
     mouse_buttons_arm(captured);
     if (captured)

@@ -134,6 +134,9 @@ uint64_t gpu_bind_stamp();
 /// mirrors goes back to guest memory (end, outside any pass, before the closing barrier)
 void memory_begin_submission();
 void memory_sync_mirrors_before_segments();   // (relink: vk_memory.cpp)
+/// (ReLink-R 0.0.14) the pre-sync's counts since the last call, and resets them: pools synced, of them with no dirty page,
+/// pages walked, dirty pages, ms in the clean pools' syncs, ms in the others'
+void memory_presync_stats(double* pools, double* clean, double* walked, double* dirty, double* clean_ms, double* dirty_ms);
 bool probe_on();                                // (relink: vk_draw.cpp, RX_VK_PROBE)
 bool probe_serial();
 void probe_dump_all(const char* why);

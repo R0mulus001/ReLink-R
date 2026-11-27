@@ -31,7 +31,10 @@ bool load_prompts_file(const char* name, uint64_t max, std::vector<uint8_t>& byt
 prompt_tex::Replacer& replacer() {
     static prompt_tex::Replacer r(
         [](std::vector<uint8_t>& b, std::string& w) { return load_prompts_file("keytex.bin", prompt_tex::kFile, b, w); },
-        [](const char* line) { logf("%s", line); });
+        [](const char* line) { logf("%s", line); },
+        [](std::vector<uint8_t>& b, std::string& w) {   // (ReLink-R 0.0.14: the keyboard's keys)
+            return load_prompts_file("keytex_keys.bin", 12 + 256 + 255ull * prompt_tex::kBlocks + 8, b, w);
+        });
     return r;
 }
 
@@ -45,6 +48,9 @@ ocarina_tex::Replacer& ocarina() {
 
 }  // namespace
 
+void prompt_tex_keys(int id, int value) { replacer().keys(id, value); }   // (ReLink-R 0.0.14)
+void prompt_tex_device(int value) { replacer().device(value); }
+int prompt_tex_gen() { return replacer().gen(); }
 void prompt_tex_announce(int value) {
     replacer().announce(value);
     ocarina().announce(value);

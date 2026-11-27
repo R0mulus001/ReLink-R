@@ -636,14 +636,18 @@ MENU_HINTS(hn_pad_layout, 0, "The Switch's order: A on the right, B at the botto
            "Bindings of your own, from the Controls page.")
 // (relink) Button prompts: the game's button font, made for the family and the bindings at the start (host/prompts.c)
 const char* tx_button_prompts(int v) {
-    static const char* t[] = {"Nintendo", "Xbox", "PlayStation"};
-    return t[std::clamp(v, 0, 2)];
+    static const char* t[] = {"Nintendo", "Xbox", "PlayStation", "Keyboard", "Auto"};   // (ReLink-R 0.0.14: 3, 4)
+    return t[std::clamp(v, 0, 4)];
 }
 MENU_HINTS(hn_button_prompts, 0, "The game's own: the Switch's letters.",
            "A, B, X, Y, LB, RB, LT, RT, Menu and View, drawn by ReLink, the faded letters around the HUD's action button "
            "too. The ocarina's notes keep the Switch's.",
            "Cross, circle, square, triangle, L1, R1, L2, R2, Options and Create, drawn by ReLink, the faded letters around "
-           "the HUD's action button too. The ocarina's notes keep the Switch's.")
+           "the HUD's action button too. The ocarina's notes keep the Switch's.",
+           "The key or mouse button bound to each button on the Controls page, in texts, hints and menus (Kenney's key "
+           "pictures). The HUD's faded letters and the ocarina's notes keep the Switch's.",
+           "The device you use: the keyboard's keys while you play with it, the game's own letters while you use a "
+           "controller, switching as you go (a prompt on screen changes when the game shows it again).")
 
 // (relink) The keys ReLink's own keyboard actions can take (Menu key, Screenshot key, Fullscreen key), by index: kept in
 // relink_options.ini as these indexes: the list must not change (None is its length). F1 opens the menu too while no other of these rows is F1 (keyboards without Insert)
@@ -782,7 +786,7 @@ Row rows[] = {
      nullptr, false, true},
     {TAB_CONTROLS, "Layout preset", &opts.pad_layout, 0, 3, 1, tx_pad_layout,
      "Which face button is which. Binding one yourself on the Controls page makes it Custom.", hn_pad_layout},
-    {TAB_CONTROLS, "Button prompts", &opts.button_prompts, 0, 2, 1, tx_button_prompts,   // (relink: host/prompts.c)
+    {TAB_CONTROLS, "Button prompts", &opts.button_prompts, 0, 4, 1, tx_button_prompts,   // (relink: host/prompts.c)
      "The buttons the game's prompts show. They follow the Layout preset and your own bindings. Applies the next time the "
      "game starts.", hn_button_prompts, true, true},
     {TAB_CONTROLS, "Controls", nullptr, 0, 0, 0, nullptr,   // (relink: opens its page)
@@ -1857,7 +1861,7 @@ int opt_help_most(float u) {
     HDC dc = CreateCompatibleDC(nullptr);
     HFONT f = cart::face(13 * u, 0);
     HGDIOBJ old = SelectObject(dc, f);
-    const int width = (int)((680 - 20 - 20 - 24) * u);
+    const int width = (int)((360 - 40 - 14) * u);   // (ReLink-R 0.0.14: the pane's text, kOptPaneW less its margins and the hint's bar)
     int most = 0;
     for (const Row& r : rows) {
         int hint = 0;
@@ -1870,6 +1874,9 @@ int opt_help_most(float u) {
 }
 // (the frame's sizes, in its pixels at 720 lines)
 constexpr float kOptW = 680, kOptTop = 22, kOptTabH = 36, kOptRowH = 32, kOptHeadH = 24, kOptFootH = 36, kOptPendH = 34;
+// (ReLink-R 0.0.14, Longshot's settings layout in ReLink-R's colours) what the selected row does, in a pane of its own beside the
+// rows (Longshot's right-hand panel), not in a box under them: the rows keep their column, its width and every place a click finds
+constexpr float kOptPaneW = 360, kOptPaneGap = 12;
 /// The rows' height on tab t, the selected row's text left out
 float opt_rows_h(int t) {
     float hh = 0;
@@ -1894,8 +1901,11 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     // the shell and the label (the corners outside it black: see-through, menu_bmp is keyed)
     startup_gdi::fill(dc, 0, 0, W, H, RGB(0, 0, 0));
     startup_gdi::round_rect(dc, 0, 0, W, H, P(14), kShell);
-    const int lx = P(10), lw = W - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12);
+    // (ReLink-R 0.0.14) the rows' column as before (kOptW wide), the description's pane at its right, the buttons' bar under both
+    const int lx = P(10), lw = P(kOptW) - 2 * lx, ly = P(kOptTop), lh = H - ly - P(12) - P(kOptFootH);
+    const int pane_x = lx + lw + P(kOptPaneGap), pane_w = W - pane_x - lx;
     startup_gdi::round_rect(dc, lx, ly, lw, lh, P(9), kLabel);
+    startup_gdi::round_rect(dc, pane_x, ly + P(kOptTabH), pane_w, lh - P(kOptTabH), P(9), kLabel);
     // (ReLink-R 0.0.3, the drafts) the name in the shell's band over the label, the logo's sword beside it
     if (paint_bits) {
         GdiFlush();   // (what GDI has drawn first: the sword's pixels go over it)
@@ -1934,18 +1944,26 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     }
     opt_hit.tabs_bottom = ly + P(kOptTabH);
     startup_gdi::fill(dc, lx, ly + P(kOptTabH), lw, P(9), kLabel);   // (the label again under the strips' round bottoms)
+    {   // (ReLink-R 0.0.14) the version at the top's right, over the pane
+        HFONT vf = face(12 * u, 0);
+        HGDIOBJ was = SelectObject(dc, vf);
+        SetTextColor(dc, kFaint);
+        const std::string ver = version_text(RELINK_VERSION);
+        TextOutA(dc, W - lx - P(8) - text_w(dc, ver), ly + (P(kOptTabH) - text_h(dc)) / 2, ver.c_str(), (int)ver.size());
+        SelectObject(dc, was), DeleteObject(vf);
+    }
     // the bottom: what the selected row does, the restart line when one is pending, then the buttons
     const bool pending = restart_pending() != 0;
-    const int foot_top = ly + lh - P(kOptFootH), pend_top = foot_top - (pending ? P(kOptPendH) : 0);
-    const int help_top = pend_top - opt_help_box;
-    startup_gdi::fill(dc, lx, foot_top, lw, std::max(1, P(1)), kRule);
+    const int foot_top = ly + lh;   // (ReLink-R 0.0.14: the buttons' bar, under the column and the pane)
+    const int help_top = foot_top - P(6);   // (the rows go down to the bar: what the selected one does is in the pane)
     HFONT small = face(12.5f * u, 1);
     HGDIOBJ old = SelectObject(dc, small);
-    if (pending) {
-        startup_gdi::round_rect(dc, lx + P(12), pend_top + P(3), lw - P(24), P(kOptPendH) - P(8), P(8), kTag);
+    if (pending) {   // (the restart line: at the pane's foot)
+        const int pend_top = foot_top - P(kOptPendH) - P(8);
+        startup_gdi::round_rect(dc, pane_x + P(10), pend_top + P(3), pane_w - P(20), P(kOptPendH) - P(8), P(8), kTag);
         SetTextColor(dc, cart::kTagInk);
-        const std::string line = restart_line(dc, lw - P(48)) + " (when the menu closes)";
-        TextOutA(dc, lx + P(24), pend_top + P(3) + (P(kOptPendH) - P(8) - text_h(dc)) / 2, line.c_str(), (int)line.size());
+        const std::string line = restart_line(dc, pane_w - P(44)) + " (when it closes)";
+        TextOutA(dc, pane_x + P(20), pend_top + P(3) + (P(kOptPendH) - P(8) - text_h(dc)) / 2, line.c_str(), (int)line.size());
     }
     // the rows
     const int body_l = lx + P(10), body_r = lx + lw - P(10);
@@ -1954,7 +1972,7 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     HFONT name_f = face(15 * u, 0), name_b = face(15 * u, 2), value_f = face(14 * u, 0), chip_f = face(13 * u, 0),
           chip_b = face(13 * u, 2), head_f = face(10.5f * u, 2), help_f = face(13 * u, 0), tag_f = face(9.5f * u, 2);
     const int n = tab_row_count(cur_tab), sel = tab_selected[cur_tab];
-    const int help_w = body_r - body_l - P(24);
+    const int help_w = pane_w - P(40);   // (ReLink-R 0.0.14: in the pane)
     SelectObject(dc, help_f);
     const Row& selected = rows[tab_row_to_global(cur_tab, sel)];
     // (the rows' places, all one height; scrolled so the selected one shows when they do not all fit)
@@ -1982,18 +2000,22 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
         if (head_at[k] >= 0) {
             int place = 0;
             SelectObject(dc, head_f);
-            SetTextColor(dc, kFaint);
-            startup_gdi::spaced(dc, row_group(gi, &place), body_l + P(12), body_top + head_at[k] - opt_scroll + P(10), P(2.5f), false);
+            SetTextColor(dc, kYellow);   // (ReLink-R 0.0.14: the heading in the accent, a rule after it)
+            const char* g = row_group(gi, &place);
+            const int hy = body_top + head_at[k] - opt_scroll + P(10);
+            startup_gdi::spaced(dc, g, body_l + P(6), hy, P(2.5f), false);
+            const int gx = body_l + P(6) + text_w(dc, g) + P(2.5f) * (int)strlen(g) + P(10);
+            if (gx < body_r - P(6)) startup_gdi::fill(dc, gx, hy + text_h(dc) / 2, body_r - P(6) - gx, std::max(1, P(1)), kRule);
         }
         const int top = body_top + top_at[k] - opt_scroll, rh = P(kOptRowH);
         opt_hit.row_top[k] = top, opt_hit.row_bottom[k] = top + rh;
-        if (on) {
-            startup_gdi::round_rect(dc, body_l, top + P(2), body_r - body_l, rh - P(3), P(10), look.edge);
-            startup_gdi::round_rect(dc, body_l + std::max(1, P(1.5f)), top + P(2) + std::max(1, P(1.5f)),
-                                    body_r - body_l - 2 * std::max(1, P(1.5f)), rh - P(3) - 2 * std::max(1, P(1.5f)), P(9), look.tint);
-        } else {
-            const bool next_heads = k + 1 < n && head_at[k + 1] >= 0;
-            if (k + 1 < n && k + 1 != sel && !next_heads) startup_gdi::fill(dc, body_l + P(4), top + rh - 1, body_r - body_l - P(8), std::max(1, P(1)), kRule);
+        {   // (ReLink-R 0.0.14) each row a card: its edge, its face, and its control's field (the right half, darker)
+            const int b = std::max(1, P(1)), ct = top + P(2), chh = rh - P(4);
+            startup_gdi::round_rect(dc, body_l, ct, body_r - body_l, chh, P(7), on ? look.edge : kRule);
+            startup_gdi::round_rect(dc, body_l + b, ct + b, body_r - body_l - 2 * b, chh - 2 * b, P(6), on ? look.tint : kGroove);
+            const int fl = body_l + (body_r - body_l) * 52 / 100;
+            startup_gdi::round_rect(dc, fl, ct + b + P(2), body_r - b - P(2) - fl, chh - 2 * b - P(4), P(5),
+                                    on ? mix(look.tint, kShell, 0.35f) : mix(kGroove, kShell, 0.45f));
         }
         const int mid = top + P(kOptRowH) / 2 + P(1);
         // the name, then its restart tag
@@ -2091,23 +2113,62 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
     }
     SelectClipRgn(dc, nullptr);
     DeleteObject(clip);
-    {   // what the selected row does, and the line on its value: in its box, a bar of the tab's colour at its left
-        startup_gdi::fill(dc, body_l + P(4), help_top + P(2), body_r - body_l - P(8), std::max(1, P(1)), kRule);
-        startup_gdi::round_rect(dc, body_l + P(6), help_top + P(12), P(3), opt_help_box - P(20), P(1.5f), look.strip);
+    {   // (ReLink-R 0.0.14, Longshot's right-hand panel) the selected row's name, what it does, and the line on its value
+        const int px = pane_x + P(20);
+        int py = ly + P(kOptTabH) + P(18);
+        SelectObject(dc, name_b);
+        SetTextColor(dc, kInk);
+        TextOutA(dc, px, py, selected.name, (int)strlen(selected.name));
+        py += text_h(dc) + P(12);
         SelectObject(dc, help_f);
         SetTextColor(dc, kHelp);
-        const int hy = help_top + P(10);
-        const int about = wrap_help(dc, selected.help, help_w, body_l + P(18), hy, true);
+        const int about = wrap_help(dc, selected.help, help_w, px, py, true);
         if (const char* hint = selected.value && selected.hint ? selected.hint(*selected.value, -1) : nullptr) {
+            const int hy = py + about + P(12);
             SetTextColor(dc, kSoft);
-            wrap_help(dc, hint, help_w, body_l + P(18), hy + about + P(4), true);
+            const int hh = wrap_help(dc, hint, help_w - P(14), px + P(14), hy, true);
+            startup_gdi::round_rect(dc, px, hy, P(3), std::max(P(12), hh), P(1.5f), look.strip);
         }
     }
     scroll_bar(dc, opt_sc, body_r + P(2), u, look.strip);   // (more above or below: the bar on the right)
-    // the buttons: what the selected row's buttons do, Back, the tabs, the version
+    // the buttons: what the selected row's buttons do, Back, the tabs (ReLink-R 0.0.14: the bar under the column and the pane,
+    // its pad buttons at the left and the keys at the right, as key caps)
     SelectObject(dc, small);
-    const int fy = foot_top + P(kOptFootH) / 2;
+    const int fy = foot_top + P(kOptFootH) / 2 + P(2);
     int fx = lx + P(16);
+    {   // (key caps: a word's, or two caps with an arrow drawn in each: up and down, left and right)
+        const char* const keys[][2] = {{"Choose", "^v"}, {"Change", "<>"}, {"Tabs", "Q E"}, {"Close", "Esc"}};
+        int kx = W - lx - P(8);
+        const int ch = P(20), ar = P(8);
+        const auto cap = [&](int x, int cw) { startup_gdi::round_rect(dc, x, fy - ch / 2, cw, ch, P(4), kInk); };
+        const auto arrow = [&](int cx, char d) {
+            if (d == '<') cart::triangle(dc, cx, fy, ar, -1, kShell);
+            else if (d == '>') cart::triangle(dc, cx, fy, ar, 1, kShell);
+            else if (d == '^') cart::triangle(dc, cx, fy, ar, 0, kShell);
+            else for (int i = 0; i <= ar / 2; i++) startup_gdi::fill(dc, cx - (ar / 2 - i), fy - ar / 4 + i, 2 * (ar / 2 - i) + 1, 1, kShell);
+        };
+        for (int i = 3; i >= 0; i--) {
+            const bool arrows = i < 2;
+            if (arrows) {
+                for (int a = 1; a >= 0; a--) {
+                    kx -= ch;
+                    cap(kx, ch);
+                    arrow(kx + ch / 2, keys[i][1][a]);
+                    if (a) kx -= P(3);
+                }
+            } else {
+                const int cw = std::max(ch, text_w(dc, keys[i][1]) + P(12));
+                kx -= cw;
+                cap(kx, cw);
+                SetTextColor(dc, kShell);
+                TextOutA(dc, kx + (cw - text_w(dc, keys[i][1])) / 2, fy - text_h(dc) / 2, keys[i][1], (int)strlen(keys[i][1]));
+            }
+            kx -= P(6) + text_w(dc, keys[i][0]);
+            SetTextColor(dc, kHelp);
+            TextOutA(dc, kx, fy - text_h(dc) / 2, keys[i][0], (int)strlen(keys[i][0]));
+            kx -= P(18);
+        }
+    }
     const auto glyph = [&](const char* letter, COLORREF c) {
         const int d = P(19);
         startup_gdi::round_rect(dc, fx, fy - d / 2, d, d, d / 2, c);
@@ -2137,16 +2198,13 @@ void paint_options(HDC dc, uint32_t w, uint32_t h) {
         fx += tw + P(6);
         say("Tabs");
     }
-    SetTextColor(dc, kFaint);
-    const std::string ver = version_text(RELINK_VERSION);
-    if (fx + text_w(dc, ver) < lx + lw - P(16)) TextOutA(dc, lx + lw - P(16) - text_w(dc, ver), fy - text_h(dc) / 2, ver.c_str(), (int)ver.size());
-    SelectObject(dc, old);
+    SelectObject(dc, old);   // (ReLink-R 0.0.14: the version is at the top's right)
     for (HFONT f : {small, name_f, name_b, value_f, chip_f, chip_b, head_f, help_f, tag_f}) DeleteObject(f);
 }
 /// The options page's size at a window of w x h: the frame at the scale that fits, as tall as its longest tab with the
 /// tallest text open, or the window's height less a margin (the rows scroll then)
 void options_size(uint32_t w, uint32_t h, uint32_t* mw, uint32_t* mh) {
-    float u = std::min((float)h / 720.0f, ((float)w - 32.0f) / kOptW);
+    float u = std::min((float)h / 720.0f, ((float)w - 32.0f) / (kOptW + kOptPaneW + kOptPaneGap));   // (ReLink-R 0.0.14: the pane)
     u = std::clamp(u, 0.6f, 4.0f);
     static float measured_at = -1;
     static int help_most = 0;
@@ -2156,8 +2214,11 @@ void options_size(uint32_t w, uint32_t h, uint32_t* mw, uint32_t* mh) {
     float rows_h = 0;
     for (int t = 0; t < TAB_COUNT; t++) rows_h = std::max(rows_h, opt_rows_h(t));
     const float pend = restart_pending() ? kOptPendH : 0;
-    const float full = (kOptTop + kOptTabH + 6 + rows_h + 4 + pend + kOptFootH + 12) * u + (float)opt_help_box;
-    *mw = (uint32_t)std::lround(kOptW * u);
+    // (ReLink-R 0.0.14) the rows' height, or the pane's (the name, the longest text, the restart line), whichever is more
+    const float rows_full = (kOptTop + kOptTabH + 6 + rows_h + 6 + kOptFootH + 12) * u;
+    const float pane_full = (kOptTop + kOptTabH + 18 + 40 + 12 + pend + 8 + kOptFootH + 12) * u + (float)opt_help_box;
+    const float full = std::max(rows_full, pane_full);
+    *mw = (uint32_t)std::lround((kOptW + kOptPaneW + kOptPaneGap) * u);
     *mh = (uint32_t)std::min(full, (float)h - 16.0f * u);
 }
 
@@ -3698,6 +3759,8 @@ int menu_item_count(int i) { return i >= 0 && i < kItems ? item_counts[i].load(s
 int menu_link_age() { return link_age.load(std::memory_order_relaxed); }
 void menu_option_set(int id, int value) {
     if (id == HOS_PROMPTS_TEX_ID) return prompt_tex_announce(value);   // (relink: the button font's family and bindings, host/prompts.c)
+    if (id == HOS_PROMPTS_KEYS_ID || id == HOS_PROMPTS_KEYS_Y_ID) return prompt_tex_keys(id, value);   // (ReLink-R 0.0.14)
+    if (id == HOS_PROMPTS_DEVICE_ID) return prompt_tex_device(value);   // (ReLink-R 0.0.14: Auto's device in use)
     if (id == OOT_CHEAT_AGE_ID) {   // (relink: the Travel page's list is of Link's age)
         if (link_age.exchange(value, std::memory_order_relaxed) != value && page == 6) menu_refresh = true;
         return;

@@ -5,6 +5,14 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.14-dev**: the mirror syncs' chunk diff is **on by default**: measured at native 1920x1080 (no upscaler) in Silent mode,
+  the same scripted route each time, the Market went from 40.4 to 50.0 FPS (1 % low 24.4 to 27.8; 33.7 to 5.2 MB copied to
+  the graphics card a frame) and Lon Lon Ranch from 42.2 to 44.4; `RX_VK_MSYNC_DIFF=0` in relink_env.txt turns it off.
+  **Keyboard button prompts**: Controls > Button prompts has **Keyboard** (each prompt shows the key or mouse button bound to
+  that button on the Controls page: "E Pick Up", the HUD's item keys) and **Auto** (Keyboard when no controller is connected
+  as the game starts); Kenney's CC0 key pictures, after Hookshot #2435 and HeyListen. The HUD action cross's faded letters and
+  the ocarina's notes keep the Switch's. `RX_VK_TEST_BARRIER_DROP` (a measurement only: it shows the engine's barriers cost
+  ~3 ms of graphics-card time in the Market but no FPS there now: the frame is held by the CPU side).
 - **0.0.13-dev**: on top of upstream **0.7.9.4** (pipelines made at their first draw, shaders read ahead while an area loads,
   the neighbouring area held when Link steps back, frees off the submit path, faster multi-layer ASTC on NVIDIA, Xbox pads on
   their own thread). New, to test: the mirror syncs copy only the 256-byte pieces of the game's memory that changed, from a

@@ -7,7 +7,10 @@
    position.
 
    When the game opens that font and the player chose Xbox or PlayStation prompts (the Insert menu's Controls tab, ini key
-   button_prompts: 0 the game's own, 1 Xbox, 2 PlayStation; HOS_BUTTON_PROMPTS=0|xbox|playstation wins over it), the host
+   button_prompts: 0 the game's own, 1 Xbox, 2 PlayStation, 3 Keyboard, 4 Auto; HOS_BUTTON_PROMPTS=0|xbox|playstation|
+   keyboard|auto wins over it. ReLink-R 0.0.14: Keyboard is the keys bound on the Controls page, from prompts/keyboard.otf
+   and keyboard.txt (nx2/keyboard_prompts.py), whose font is longer than the game's: the resource size table is served
+   from prompts/rsizetable.zs with its entry raised; Auto is Keyboard when no controller is connected at the start), the host
    writes each Switch button's slot with the label of the pad position that button is bound to (hos_binding: the
    defaults, the Layout preset, the player's own bindings), fixes the cmap's and the file's checksums, wraps the font as
    the game's file is wrapped (prompts.txt's wrapper record) inside a zstd frame of raw blocks (no compression, no
@@ -122,6 +125,9 @@ typedef struct {
     unsigned long wrapped_len;
     unsigned char after[PR_MAX_AFTER];
     long after_len;
+    unsigned long keyg[256];                 /* (ReLink-R 0.0.14, keyboard.txt: the glyph of each virtual-key code; 0 none) */
+    int have_keys;
+    char table[160];                         /* (keyboard.txt: the size table rsizetable.zs replaces) */
 } Sidecar;
 
 /* prompts.txt (nx2/button_glyphs.py write_sidecar): 1, or 0 with why in note */
@@ -167,6 +173,12 @@ static int read_sidecar(const char *path, const char *family, Sidecar *s, char *
             int i = 0;
             while (ok && i < PR_POSITIONS && strcmp(positions[i].name, w[2])) i++;
             if (ok && i < PR_POSITIONS && !strcmp(w[1], family)) s->label[i] = a;
+        } else if (!strcmp(w[0], "key")) {   /* (ReLink-R 0.0.14, keyboard.txt) */
+            ok = nw == 3 && number(w[1], 0, 255, &a) && number(w[2], 0, 0xFFFF, &b) && b > 0;
+            if (ok) s->keyg[a] = b, s->have_keys = 1;
+        } else if (!strcmp(w[0], "table")) {
+            ok = nw == 2 && strlen(w[1]) < sizeof s->table && !strpbrk(w[1], "/\\:");
+            if (ok) snprintf(s->table, sizeof s->table, "%s", w[1]);
         } else if (!strcmp(w[0], "cmap")) {
             ok = nw == 4 && number(w[1], 0, PR_MAX_FONT, &a) && number(w[2], 0, PR_MAX_FONT, &b) &&
                  number(w[3], 0, PR_MAX_FONT, &c);
@@ -201,8 +213,12 @@ static int read_sidecar(const char *path, const char *family, Sidecar *s, char *
             return why(note, cap, "%s has no slot or switch record for Switch %s", path, buttons[i].name);
         if (s->slot[i] + 2 > s->size) return why(note, cap, "%s's slot for Switch %s is past the font's end", path, buttons[i].name);
     }
-    for (int i = 0; i < PR_POSITIONS; i++)
-        if (s->label[i] == (unsigned long)-1) return why(note, cap, "%s has no %s %s label", path, family, positions[i].name);
+    if (!strcmp(family, "keyboard")) {   /* (ReLink-R 0.0.14: keys, not pad labels) */
+        if (!s->have_keys || !s->table[0]) return why(note, cap, "%s has no key or table record", path);
+    } else {
+        for (int i = 0; i < PR_POSITIONS; i++)
+            if (s->label[i] == (unsigned long)-1) return why(note, cap, "%s has no %s %s label", path, family, positions[i].name);
+    }
     if (s->cmap_off + s->cmap_len > s->size || s->cmap_sum + 4 > s->size || s->head + 4 > s->size || !s->cmap_len)
         return why(note, cap, "%s's cmap or head record is past the font's end", path);
     if (s->wrapped_len != 8 + s->size + (unsigned long)s->after_len)
@@ -233,12 +249,17 @@ static uint64_t fnv1a64(const unsigned char *b, unsigned long n) {
 
 int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N], const char *out_path, char *note,
                  size_t cap) {
-    if (strcmp(family, "xbox") && strcmp(family, "playstation"))
+    /* (ReLink-R 0.0.14: binding[] holds virtual-key codes, 0 none; "keyboard-live": Auto's, the slots on the game's own glyphs,
+       the texts' codes rewritten for the device in use while the game runs: hos_prompts_text_*) */
+    const int live = !strcmp(family, "keyboard-live");
+    const int keyboard = live || !strcmp(family, "keyboard");
+    if (live) family = "keyboard";
+    if (strcmp(family, "xbox") && strcmp(family, "playstation") && !keyboard)
         return why(note, cap, "no button font for the family %s", family);
     char path[1024];
     Sidecar *s = (Sidecar *)malloc(sizeof *s);
     if (!s) return why(note, cap, "out of memory");
-    snprintf(path, sizeof path, "%s/prompts.txt", dir);
+    snprintf(path, sizeof path, "%s/%s", dir, keyboard ? "keyboard.txt" : "prompts.txt");
     if (!read_sidecar(path, family, s, note, cap)) return free(s), 0;
 
     snprintf(path, sizeof path, "%s/%s.otf", dir, family);
@@ -252,19 +273,38 @@ int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N
     else if (ot_sum(font, s->size) != 0xB1B0AFBAu || ot_sum(font + s->cmap_off, s->cmap_len) != be32(font + s->cmap_sum))
         why(note, cap, "%s's checksums do not hold: not the font prompts.txt was made with", path);
     else ok = 1;
-    for (int i = 0; ok && i < PR_BUTTONS; i++) {   /* (as made, each slot holds one of the family's labels) */
+    for (int i = 0; ok && i < PR_BUTTONS; i++) {   /* (as made, each slot holds one of the family's labels, or keys) */
         const unsigned v = (unsigned)font[s->slot[i]] << 8 | font[s->slot[i] + 1];
         int k = 0;
+        if (keyboard) {
+            while (k < 256 && s->keyg[k] != v) k++;
+            if (k == 256) ok = why(note, cap, "%s's slot for Switch %s holds none of keyboard.txt's keys", path, buttons[i].name);
+            continue;
+        }
         while (k < PR_POSITIONS && s->label[k] != v) k++;
         if (k == PR_POSITIONS) ok = why(note, cap, "%s's slot for Switch %s holds none of prompts.txt's labels", path, buttons[i].name);
     }
     if (!ok) return free(font), free(s), 0;
+    if (keyboard) {   /* (ReLink-R 0.0.14) each Switch button's slot: the key bound to it, or the game's own glyph */
+        char shows[600];
+        size_t at = 0;
+        shows[0] = 0;
+        for (int i = 0; i < PR_BUTTONS; i++) {
+            const int vk = live ? 0 : binding[buttons[i].sw];
+            const unsigned long g = vk > 0 && vk < 256 && s->keyg[vk] ? s->keyg[vk] : s->own[i];
+            font[s->slot[i]] = (unsigned char)(g >> 8), font[s->slot[i] + 1] = (unsigned char)g;
+            if (at < sizeof shows)
+                at += (size_t)snprintf(shows + at, sizeof shows - at, vk > 0 ? "%s%s key 0x%02X" : "%s%s keeps the Switch's",
+                                       i ? ", " : "", buttons[i].name, vk);
+        }
+        if (note && cap) snprintf(note, cap, "%s", shows);
+    }
 
     /* each Switch button's slot: the label of the pad position it is bound to, or the game's own glyph */
     char shows[512];
     size_t at = 0;
     shows[0] = 0;
-    for (int i = 0; i < PR_BUTTONS; i++) {
+    for (int i = 0; !keyboard && i < PR_BUTTONS; i++) {
         const int pos = prompts_position_of_pad(binding[buttons[i].sw]);
         const unsigned long g = pos >= 0 ? s->label[pos] : s->own[i];
         font[s->slot[i]] = (unsigned char)(g >> 8), font[s->slot[i] + 1] = (unsigned char)g;
@@ -317,8 +357,20 @@ int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N
         remove(out_path);
         return why(note, cap, "%s could not be written whole", out_path);
     }
-    if (note && cap) snprintf(note, cap, "%s", shows);
+    if (note && cap && !keyboard) snprintf(note, cap, "%s", shows);
     return 1;
+}
+
+/* (ReLink-R 0.0.14) the size table keyboard.txt names (System/Resource/<name>), into name: 1, or 0 with why in note */
+int prompts_keyboard_table(const char *dir, char *name, size_t cap, char *note, size_t note_cap) {
+    char path[1024];
+    Sidecar *s = (Sidecar *)malloc(sizeof *s);
+    if (!s) return why(note, note_cap, "out of memory");
+    snprintf(path, sizeof path, "%s/keyboard.txt", dir);
+    const int ok = read_sidecar(path, "keyboard", s, note, note_cap);
+    if (ok) snprintf(name, cap, "%s", s->table);
+    free(s);
+    return ok;
 }
 
 /* ---- the host's side: the setting, the bindings, the paths, the open -------------------------------------------- */
@@ -330,7 +382,11 @@ int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N
 #include <windows.h>
 
 #define FONT_PATH "Font2/Scalable/External.Nin_Ounce_NVN2.bfotf.zs"
-static const char *const family_names[3] = {"nintendo", "xbox", "playstation"};
+/* (ReLink-R 0.0.14) 3: the keyboard's keys (nx2/keyboard_prompts.py); 4 Auto: the keyboard's when no controller is
+   connected at the start, the game's own when one is */
+#define FAM_KEYBOARD 3
+#define FAM_AUTO 4
+static const char *const family_names[5] = {"nintendo", "xbox", "playstation", "keyboard", "auto"};
 
 /* The family chosen: HOS_BUTTON_PROMPTS, else button_prompts= in relink_options.ini beside the game, else 0 (the game's
    own). *from says which */
@@ -341,7 +397,9 @@ static int chosen_family(const char *game_dir, char sep, const char **from) {
         if (!strcmp(e, "1") || !_stricmp(e, "xbox")) return 1;
         if (!strcmp(e, "2") || !_stricmp(e, "playstation") || !_stricmp(e, "ps")) return 2;
         if (!strcmp(e, "0") || !_stricmp(e, "nintendo") || !_stricmp(e, "switch")) return 0;
-        hos_log("prompts: HOS_BUTTON_PROMPTS=%s is not 0, xbox or playstation: the ini's choice", e);
+        if (!strcmp(e, "3") || !_stricmp(e, "keyboard")) return FAM_KEYBOARD;
+        if (!strcmp(e, "4") || !_stricmp(e, "auto")) return FAM_AUTO;
+        hos_log("prompts: HOS_BUTTON_PROMPTS=%s is not 0, xbox, playstation, keyboard or auto: the ini's choice", e);
     }
     *from = "button_prompts in relink_options.ini";
     char path[MAX_PATH];
@@ -354,7 +412,7 @@ static int chosen_family(const char *game_dir, char sep, const char **from) {
             if (!strncmp(line, "button_prompts=", 15)) v = atoi(line + 15);
         fclose(f);
     }
-    return v >= 0 && v <= 2 ? v : 0;
+    return v >= 0 && v <= FAM_AUTO ? v : 0;
 }
 
 int hos_mods_romfs(const char *rel, char *out, size_t cap);   /* mods.c */
@@ -364,69 +422,220 @@ void rx_option_set(int id, int value);                       /* rx_backend.c */
 /* What the font was given, for the renderer's HUD cross letters (gpu/vk/prompt_tex.h): HOS_PROMPTS_TEX_VALUE, -1 not
    decided yet */
 static volatile LONG tex_value = -1;
+static volatile LONG keys_abx = 0, keys_y = 0;   /* (ReLink-R 0.0.14: the keyboard face's keys of Switch A, B, X and Y) */
 
 /* The renderer told what the font was given (the family, 0 when the game's own font stays, and Switch A, B, X and Y's
    inputs); rx_backend.c rx_start calls it again once the renderer is there, for a font opened before that */
+static volatile LONG live_on;        /* (ReLink-R 0.0.14, Auto's: defined with the texts' rewrite below) */
+static int live_start_keys;
+int hos_input_device(void);
 void hos_prompts_announce(void) {
     const LONG v = InterlockedCompareExchange(&tex_value, -1, -1);
+    if (v >= 0 && InterlockedCompareExchange(&live_on, 0, 0))   /* (ReLink-R 0.0.14, Auto: the device before the family) */
+        rx_option_set(HOS_PROMPTS_DEVICE_ID, hos_input_device() ? hos_input_device() : (live_start_keys ? 1 : 2));
+    if (v >= 0 && (v & 3) == FAM_KEYBOARD) {   /* (ReLink-R 0.0.14: the keys before the family, which latches them) */
+        rx_option_set(HOS_PROMPTS_KEYS_ID, (int)InterlockedCompareExchange(&keys_abx, 0, 0));
+        rx_option_set(HOS_PROMPTS_KEYS_Y_ID, (int)InterlockedCompareExchange(&keys_y, 0, 0));
+    }
     if (v >= 0) rx_option_set(HOS_PROMPTS_TEX_ID, (int)v);
 }
 
-/* nn_fs.c OpenFile, for a read: the file to open instead of guest's, 1 when there is one. Decided at the font's first
-   open; a later open of it gets the same answer */
+int hos_pad_present(void);   /* nn_hid.c (ReLink-R 0.0.14: Auto) */
+
+/* What was decided, once, at the first open of the font or of the resource size table (ReLink-R 0.0.14: the keyboard's
+   font is longer than the game's, so the table, read at the boot, before the font, is served with its entry raised) */
+static volatile LONG state;          /* 0 not decided, 1 being decided, 2 decided */
+static char cache[MAX_PATH];         /* (the font made, empty: the game's own) */
+static char table_rel[200];          /* (System/Resource/<the table keyboard.txt names>) */
+static char table_path[MAX_PATH];    /* (prompts/rsizetable.zs, served for table_rel; empty: the game's own table) */
+
+/* ---- (ReLink-R 0.0.14) Auto's prompts while the game runs ------------------------------------------------------------------
+   After Hookshot 786b5b03 (#2366) and Longshot's host/prompts.c (text_rewrite), GPL-3.0. The game keeps each character code's
+   glyph once drawn, whatever the font says later, so a change shows only through other codes: the keyboard's font has each
+   key's own code point (KEY_BASE + its virtual-key code, nx2/keyboard_prompts.py), and a text's Switch button codes
+   (U+E040...) are rewritten to the code of the key bound to that button while the keyboard is the device in use, and back when
+   a controller is, as the game lays the text box out or draws it (the hook sites in nx2/oot_patches.py; the box: its text's
+   UTF-8 at +0xf0, its length in bytes at +0x124, its status at +8: 0x20000 lay out again, 0x100000 draw again, as the word
+   after it allows). A text that stays on screen keeps its icons until the game lays it out or draws it again. */
+#define KEY_BASE 0xF7C0u
+static volatile LONG live_on;        /* (Auto's font served: the hooks rewrite) */
+static int live_start_keys;          /* (the device at the start, until something is pressed: 1 the keyboard) */
+int hos_input_device(void);          /* nn_hid.c: 1 keyboard, 2 controller, 0 nothing pressed yet */
+
+static int live_keys_now(void) {
+    const int d = hos_input_device();
+    return d ? d == 1 : live_start_keys;
+}
+/* the code a Switch button code or a key's code is to be now; c itself when it stays */
+static unsigned live_code(unsigned c, int keys) {
+    if (keys) {
+        for (int i = 0; i < PR_BUTTONS; i++)
+            if (buttons[i].cp == c) {
+                int vk = hos_binding(HOS_BIND_KEY, buttons[i].sw, 0);
+                if (!vk) vk = hos_binding(HOS_BIND_KEY, buttons[i].sw, 1);
+                return vk > 0 && vk < 256 ? KEY_BASE + (unsigned)vk : c;
+            }
+        return c;
+    }
+    if (c < KEY_BASE || c >= KEY_BASE + 256) return c;
+    const int vk = (int)(c - KEY_BASE);
+    for (int i = 0; i < PR_BUTTONS; i++)   /* (the Switch button that key is bound to: a key is bound to one button at most) */
+        if (hos_binding(HOS_BIND_KEY, buttons[i].sw, 0) == vk || hos_binding(HOS_BIND_KEY, buttons[i].sw, 1) == vk)
+            return buttons[i].cp;
+    return c;
+}
+/* the box's codes for the device in use; 1 when it changed them */
+static int text_rewrite(uint64_t box) {
+    if (!InterlockedCompareExchange(&live_on, 0, 0) || !box) return 0;
+    const int keys = live_keys_now();
+    static volatile LONG logged_keys = -1;   /* (each change of the device, once: which way the texts go now) */
+    if (InterlockedExchange(&logged_keys, keys) != keys) hos_log("prompts: Auto: the texts' prompts now for %s", keys ? "the keyboard" : "a controller");
+    const uint64_t text = *(const uint64_t *)GP(box + 0xf0);
+    const uint32_t len = *(const uint32_t *)GP(box + 0x124);
+    if (!text || len < 3 || len > 65536) return 0;
+    uint8_t *s = (uint8_t *)GP(text);
+    int changed = 0;
+    for (uint32_t i = 0; i + 2 < len; i++) {   /* (UTF-8: these codes are 3 bytes, 1110xxxx 10xxxxxx 10xxxxxx) */
+        if ((s[i] != 0xEE && s[i] != 0xEF) || (s[i + 1] & 0xC0) != 0x80 || (s[i + 2] & 0xC0) != 0x80) continue;
+        const unsigned code = (unsigned)(s[i] & 0x0F) << 12 | (unsigned)(s[i + 1] & 0x3F) << 6 | (s[i + 2] & 0x3F);
+        const unsigned c = live_code(code, keys);
+        if (c != code) {
+            s[i] = (uint8_t)(0xE0 | c >> 12), s[i + 1] = (uint8_t)(0x80 | (c >> 6 & 0x3F)), s[i + 2] = (uint8_t)(0x80 | (c & 0x3F));
+            changed = 1;
+        }
+        i += 2;
+    }
+    return changed;
+}
+static void mark_box(uint64_t box, uint32_t bits) {   /* (the box's status bits set, as the word after them allows) */
+    const uint64_t status = *(const uint64_t *)GP(box + 8);
+    if (!status) return;
+    uint32_t *word = (uint32_t *)GP(status);
+    word[0] |= bits & word[1];
+}
+/* nn_hid.c: the device in use changed (1 the keyboard, 2 a controller): Auto's HUD cross follows it (the texts follow as the game
+   shows them, text_rewrite) */
+void hos_prompts_device(int d) {
+    if (InterlockedCompareExchange(&live_on, 0, 0)) rx_option_set(HOS_PROMPTS_DEVICE_ID, d);
+}
+/* the site text boxes' layout (f_8152aec0) and draw (f_8152b670), nx2/oot_patches.py */
+void hos_prompts_text_layout(uint64_t box) {
+    if (text_rewrite(box)) mark_box(box, 0x20000);
+}
+void hos_prompts_text_draw(uint64_t box) {
+    if (text_rewrite(box)) mark_box(box, 0x20000 | 0x100000);
+}
+
+static void decide(void) {
+    char game[MAX_PATH], mod[MAX_PATH];
+    const DWORD n = hos_game_path_a(game, MAX_PATH);
+    char *b = n ? strrchr(game, '\\') : NULL, *s = n ? strrchr(game, '/') : NULL;
+    char *slash = b > s ? b : s;
+    const char sep = slash ? *slash : '\\';
+    if (slash) *slash = 0;
+    const char *from = "";
+    int fam = slash ? chosen_family(game, sep, &from) : 0;
+    int live = 0;
+    if (fam == FAM_AUTO) {   /* (SDL's controller thread may not have opened a pad yet: up to 1.5 s for one) */
+        int present = 0;
+        for (int k = 0; k < 30 && !(present = hos_pad_present()); k++) Sleep(50);
+        /* (ReLink-R 0.0.14) Auto follows the device in use while the game runs: the keyboard's font is served with the Switch's
+           own glyphs in its slots, and the texts' codes are rewritten to the keys' or back as the device changes (hos_prompts_text_*);
+           until something is pressed, the device is the one found now */
+        live_start_keys = !present;
+        live = 1;
+        fam = FAM_KEYBOARD;
+        hos_log("prompts: Auto: the prompts follow the device in use (now %s)", present ? "a controller" : "the keyboard");
+    }
+    const int keyboard = fam == FAM_KEYBOARD;
+    int pad[HOS_SW_N], binding[HOS_SW_N];
+    for (int i = 0; i < HOS_SW_N; i++) {
+        pad[i] = hos_binding(HOS_BIND_PAD, i, 0);
+        const int k0 = hos_binding(HOS_BIND_KEY, i, 0);   /* (the first key, or the second when the first is cleared) */
+        binding[i] = keyboard ? (k0 ? k0 : hos_binding(HOS_BIND_KEY, i, 1)) : pad[i];
+    }
+    if (!slash) {
+        hos_log("prompts: the game folder is not known: the game's own button font");
+    } else if (fam == 0) {
+        hos_log("prompts: the game's own button font (%s)", from);
+    } else if (hos_mods_romfs(FONT_PATH, mod, sizeof mod)) {
+        hos_log("prompts: a mod gives %s (%s): it is used, not the %s labels", FONT_PATH, mod, family_names[fam]);
+    } else {
+        char dir[MAX_PATH], path[MAX_PATH], note[700], tname[160];
+        snprintf(dir, sizeof dir, "%s%cprompts", game, sep);
+        snprintf(path, sizeof path, "%s%c%s", dir, sep, keyboard ? "keyboard.txt" : "prompts.txt");
+        int go = 1;
+        if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {
+            hos_log("prompts: no %s (the build did not make the %s font): the game's own button font", path,
+                    keyboard ? "keyboard's" : "button");
+            go = 0;
+        } else if (keyboard) {
+            snprintf(path, sizeof path, "%s%crsizetable.zs", dir, sep);
+            if (!prompts_keyboard_table(dir, tname, sizeof tname, note, sizeof note)) {
+                hos_log("prompts: %s; the game's own button font", note);
+                go = 0;
+            } else if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {   /* (absent: the font fits the game's entry) */
+                snprintf(table_rel, sizeof table_rel, "System/Resource/%s", tname);
+                if (hos_mods_romfs(table_rel, mod, sizeof mod)) {
+                    hos_log("prompts: a mod gives %s (%s): the keyboard's font would not fit it: the game's own button font",
+                            table_rel, mod);
+                    go = 0;
+                } else {
+                    snprintf(table_path, sizeof table_path, "%s", path);
+                }
+            }
+        }
+        if (go) {
+            snprintf(path, sizeof path, "%s%ccache", dir, sep);
+            CreateDirectoryA(path, NULL);
+            snprintf(path, sizeof path, "%s%ccache%cExternal.%s.bfotf.zs", dir, sep, sep, family_names[fam]);
+            if (live) snprintf(path, sizeof path, "%s%ccache%cExternal.keyboard-live.bfotf.zs", dir, sep, sep);
+            if (prompts_make(dir, live ? "keyboard-live" : family_names[fam], binding, path, note, sizeof note)) {
+                snprintf(cache, sizeof cache, "%s", path);
+                if (live) InterlockedExchange(&live_on, 1);
+                hos_log("prompts: %s %s (%s): %s; the game reads %s%s%s", family_names[fam], keyboard ? "keys" : "labels",
+                        from, note, path, table_path[0] ? ", and its size table " : "", table_path);
+            } else {
+                hos_log("prompts: %s; the game's own button font", note);
+                table_path[0] = 0;   /* (no longer font: the game's own table) */
+            }
+        }
+    }
+    /* (the HUD cross's letters follow what the font was given: its family when its font was made, else the game's own; the
+       keyboard's face: the keys bound to Switch A, B, X and Y, prompts/keytex_keys.bin) */
+    if (keyboard && cache[0]) {
+        InterlockedExchange(&keys_abx, HOS_PROMPTS_KEYS_VALUE(binding[HOS_SW_A], binding[HOS_SW_B], binding[HOS_SW_X]));
+        InterlockedExchange(&keys_y, binding[HOS_SW_Y] & 255);
+    }
+    InterlockedExchange(&tex_value, HOS_PROMPTS_TEX_VALUE(cache[0] ? fam : 0, pad[HOS_SW_A], pad[HOS_SW_B],
+                                                          pad[HOS_SW_X], pad[HOS_SW_Y]));
+    hos_prompts_announce();
+}
+
+/* nn_fs.c OpenFile, for a read: the file to open instead of guest's, 1 when there is one. Decided at the first open of the
+   font or the size table; a later open of either gets the same answer */
 int hos_prompts_redirect(const char *guest, char *out, size_t cap) {
     const char *rel = strstr(guest, ":/");
     if (!rel) return 0;
     rel += 2;
     while (*rel == '/') rel++;
-    if (_stricmp(rel, FONT_PATH)) return 0;
-    static volatile LONG state;   /* 0 not decided, 1 being decided, 2 decided */
-    static char cache[MAX_PATH];  /* (the file made, empty: the game's own) */
+    const int is_font = !_stricmp(rel, FONT_PATH);
+    const int is_table = !_strnicmp(rel, "System/Resource/ResourceSizeTable", 33);
+    if (!is_font && !is_table) return 0;
     if (InterlockedCompareExchange(&state, 1, 0) != 0) {
         while (state != 2) Sleep(0);
     } else {
-        char game[MAX_PATH], mod[MAX_PATH];
-        const DWORD n = hos_game_path_a(game, MAX_PATH);
-        char *b = n ? strrchr(game, '\\') : NULL, *s = n ? strrchr(game, '/') : NULL;
-        char *slash = b > s ? b : s;
-        const char sep = slash ? *slash : '\\';
-        if (slash) *slash = 0;
-        const char *from = "";
-        const int fam = slash ? chosen_family(game, sep, &from) : 0;
-        int binding[HOS_SW_N];
-        for (int i = 0; i < HOS_SW_N; i++) binding[i] = hos_binding(HOS_BIND_PAD, i, 0);
-        if (!slash) {
-            hos_log("prompts: the game folder is not known: the game's own button font");
-        } else if (fam == 0) {
-            hos_log("prompts: the game's own button font (%s)", from);
-        } else if (hos_mods_romfs(rel, mod, sizeof mod)) {
-            hos_log("prompts: a mod gives %s (%s): it is used, not the %s labels", FONT_PATH, mod, family_names[fam]);
-        } else {
-            char dir[MAX_PATH], path[MAX_PATH], note[600];
-            snprintf(dir, sizeof dir, "%s%cprompts", game, sep);
-            snprintf(path, sizeof path, "%s%cprompts.txt", dir, sep);
-            if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {
-                hos_log("prompts: no %s (the build did not make the button fonts): the game's own button font", path);
-            } else {
-                snprintf(path, sizeof path, "%s%ccache", dir, sep);
-                CreateDirectoryA(path, NULL);
-                snprintf(path, sizeof path, "%s%ccache%cExternal.%s.bfotf.zs", dir, sep, sep, family_names[fam]);
-                if (prompts_make(dir, family_names[fam], binding, path, note, sizeof note)) {
-                    snprintf(cache, sizeof cache, "%s", path);
-                    hos_log("prompts: %s labels (%s): %s; the game reads %s", family_names[fam], from, note, path);
-                } else {
-                    hos_log("prompts: %s; the game's own button font", note);
-                }
-            }
-        }
-        /* (the HUD cross's letters follow what the font was given: the family when the font was made, else the game's own) */
-        InterlockedExchange(&tex_value, HOS_PROMPTS_TEX_VALUE(cache[0] ? fam : 0, binding[HOS_SW_A], binding[HOS_SW_B],
-                                                              binding[HOS_SW_X], binding[HOS_SW_Y]));
-        hos_prompts_announce();
+        decide();
         InterlockedExchange(&state, 2);
     }
-    if (!cache[0]) return 0;
-    snprintf(out, cap, "%s", cache);
-    return 1;
+    if (is_font && cache[0]) {
+        snprintf(out, cap, "%s", cache);
+        return 1;
+    }
+    if (is_table && table_path[0] && !_stricmp(rel, table_rel)) {
+        snprintf(out, cap, "%s", table_path);
+        return 1;
+    }
+    return 0;
 }
 #endif

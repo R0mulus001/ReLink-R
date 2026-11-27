@@ -2167,8 +2167,11 @@ bool upload(Texture& tex, const Ranges* dirty) {
                     st_unswizzle_ns +=
                         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - u0).count();
                 }
-                if (keytex && y0 == 0 && th == g.th && block_bytes == prompt_tex::kBlocks)
-                    tex.keytex_wait = prompt_tex_apply(blocks) < 0;
+                if (keytex && y0 == 0 && th == g.th && block_bytes == prompt_tex::kBlocks) {
+                    const int r = prompt_tex_apply(blocks);
+                    tex.keytex_wait = r < 0;
+                    if (r > 0) tex.keytex_gen = prompt_tex_gen();   // (ReLink-R 0.0.14: Auto's device change uploads it again)
+                }
                 if (ocarina && y0 == 0 && th == g.th && block_bytes == ocarina_tex::kBlocks)
                     tex.keytex_wait = ocarina_tex_apply(blocks) < 0;
                 if (tex.astc && tex.bc) {   // (igpu-fix: decoded, then encoded as BC3 into the staging)
@@ -3209,6 +3212,23 @@ std::string barrier_why_report(int frames) {
 // (vk_work.h counts them), orders nothing the first did not: left out. The game's own barrier (end of a pass), then the next pass's
 // start barrier, then a dispatch's, were two or three in a row. RX_VK_BARRIER_DEDUPE_OFF=1: all recorded, as before.
 void full_barrier(VkCommandBuffer cmd, const char* why) {
+    // (ReLink-R 0.0.14, after HeyListen TICK-057 / sprint 5: a MEASUREMENT, never for play) RX_VK_TEST_BARRIER_DROP=1 leaves out
+    // the recordings' pass-start, dispatch and the game's own barriers (not the uploads', the write-backs', the mesh conversions'
+    // or a recording's edges); or a mask: 2 pass starts, 4 dispatches, 8 the game's. The picture may be wrong: it bounds what
+    // the GPU loses to those drains, which says whether porting HeyListen's RX_VK_BARRIER_TRUST / _DEDUPE_PAR can pay here
+    static const int drop_test = [] {
+        const int e = getenv("RX_VK_TEST_BARRIER_DROP") ? atoi(getenv("RX_VK_TEST_BARRIER_DROP")) : 0;
+        const int v = e == 1 ? 14 : e;
+        if (v) logf("vk: RX_VK_TEST_BARRIER_DROP=%d: %s%s%sbarriers left out (a measurement: the picture may be wrong)", e,
+                    v & 2 ? "pass-start " : "", v & 4 ? "dispatch " : "", v & 8 ? "the game's " : "");
+        return v;
+    }();
+    if (drop_test && why && (((drop_test & 2) && !strcmp(why, "barrier (pass start)")) ||
+                             ((drop_test & 4) && !strcmp(why, "barrier (dispatch)")) ||
+                             ((drop_test & 8) && !strncmp(why, "barrier (the game's nvnCommandBufferBarrier", 43)))) {
+        st_barriers_left_out.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     static const bool off = getenv("RX_VK_BARRIER_DEDUPE_OFF") != nullptr;
     const bool dedupe = !off && !par_active.load(std::memory_order_relaxed);   // (a parallel replay's threads share command buffers and the count)
     if (dedupe && cmd == last_barrier_cmd && work_epoch.load(std::memory_order_relaxed) == last_barrier_epoch) {
@@ -3459,6 +3479,12 @@ Texture* texture_touch(Texture* tex, bool for_sampling) {
                      tex->width, tex->height, tex->layers, tex->nvn_format, (unsigned long long)(bytes >> 10));
         }
         tex->upload_gen = gen;
+        return tex;
+    }
+    if (tex->keytex_gen >= 0 && tex->keytex_gen != prompt_tex_gen() && !tex->gpu_written) {   // (ReLink-R 0.0.14: Auto's
+        tex->checked_epoch = epoch;                                                                  // device changed)
+        const uint32_t gen = memory_generation();
+        if (upload(*tex, nullptr)) tex->upload_value = rec_value, tex->upload_seg = tl_seg, tex->upload_gen = gen;
         return tex;
     }
     if (tex->keytex_wait && !tex->gpu_written) {   // (relink: a HUD cross letter or an ocarina note uploaded before its

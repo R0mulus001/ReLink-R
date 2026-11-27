@@ -261,6 +261,38 @@ def patch_menu_tick(source):
         '#include "a64.h"\n', '#include "a64.h"\nextern int hos_wheel_menu_tick(Ctx *c, uint64_t screen);\n', 1)
 
 
+# (ReLink-R 0.0.14, after Hookshot 786b5b03 / #2366, GPL-3.0: the same functions of the same build of the game) the text
+# boxes' draw and layout, hooked at their head, for Auto's button prompts while the game runs (host/prompts.c)
+TEXT_DRAW_HEAD = "void f_8152b670(Ctx *__restrict A64_NOESC c) {\n"
+TEXT_LAYOUT_HEAD = "void f_8152aec0(Ctx *__restrict A64_NOESC c) {\n"
+
+
+def _hook_head(source, head, call, decl):
+    """call put first in the function that starts with head, once, and decl declared; None without the function or
+    patched before (a kept lift patched again)"""
+    start = source.find(head)
+    if start < 0 or call.split("(")[0].strip() + "(" in source:
+        return None
+    at = start + len(head)
+    return (source[:at] + call + source[at:]).replace('#include "a64.h"\n', '#include "a64.h"\n' + decl, 1)
+
+
+def patch_text_draw(source):
+    """f_8152b670, a text box's draw (x0 the box: each time the game shows it), calls hos_prompts_text_draw first: the box's
+    button codes for the device in use now, and the box laid out again when they changed (host/prompts.c)"""
+    return _hook_head(source, TEXT_DRAW_HEAD,
+                      "    hos_prompts_text_draw(c->x[0]);   /* (nx2/oot_patches.py: Auto's button prompts) */\n",
+                      "extern void hos_prompts_text_draw(uint64_t box);\n")
+
+
+def patch_text_layout(source):
+    """f_8152aec0, a text box's layout (x0 the box), calls hos_prompts_text_layout first: the box's button codes for the
+    device in use now (host/prompts.c)"""
+    return _hook_head(source, TEXT_LAYOUT_HEAD,
+                      "    hos_prompts_text_layout(c->x[0]);   /* (nx2/oot_patches.py: Auto's button prompts) */\n",
+                      "extern void hos_prompts_text_layout(uint64_t box);\n")
+
+
 class ExefsModConflict(SystemExit):
     """An exefs mod changes a function where ReLink's own change must go: the build stops with this text, said as it is"""
 
@@ -269,7 +301,8 @@ class ExefsModConflict(SystemExit):
 FUNCS = {"dynamic resolution branch": "f_80825aa0", "text speed block": "f_80b1e140", "fixed path's scale": "f_831f3200",
          "menu screens' update": "f_802f1380", "player heart protection": "f_804bd8c0", "player flight": "f_82c415e0",
          "player flight rotation": "f_806d2530", "free camera": "f_804e48c0", "zstd sequence loop": "f_801102e0",
-         "name searches": "f_805aeea0", "neighbouring area's hold": "f_832b9880"}
+         "name searches": "f_805aeea0", "neighbouring area's hold": "f_832b9880", "text boxes' draw": "f_8152b670",
+         "text boxes' layout": "f_8152aec0"}
 # (the two ReLink runs natively, host/zstd_native.c and host/names_native.c: in a function a patch changes they are left out
 # even where their text is found, or the host's code would run in place of the patched one)
 NATIVE = {"zstd sequence loop": "host/zstd_native.c", "name searches": "host/names_native.c"}
@@ -311,6 +344,8 @@ def apply(gen, *, protect_hearts=False, required=False, modded=None, notes=None)
         done["zstd sequence loop"] = 0
         done["name searches"] = 0
         done["neighbouring area's hold"] = 0
+        done["text boxes' draw"] = 0
+        done["text boxes' layout"] = 0
     for path in sorted(glob.glob(os.path.join(gen, "code_*.c"))):
         with open(path, encoding="utf-8", newline="") as f:
             s = f.read()
@@ -369,6 +404,16 @@ def apply(gen, *, protect_hearts=False, required=False, modded=None, notes=None)
             out = ocb
             done["neighbouring area's hold"] += 1
             print("oot_patches: the neighbouring area's hold in", os.path.basename(path))
+        for what, fn in (("text boxes' draw", patch_text_draw), ("text boxes' layout", patch_text_layout)):   # (ReLink-R 0.0.14)
+            if not protect_hearts or FUNCS[what] in (modded or {}):
+                continue
+            h = fn(out)
+            if h is not None:
+                out = h
+                done[what] += 1
+                print("oot_patches: the %s hook (Auto's button prompts) in %s" % (what, os.path.basename(path)))
+            elif (TEXT_DRAW_HEAD if what == "text boxes' draw" else TEXT_LAYOUT_HEAD) in out and                     ("hos_prompts_text_draw(" if what == "text boxes' draw" else "hos_prompts_text_layout(") in out:
+                done[what] += 1   # (the function's body, patched before: a kept lift)
         if out != s:
             with open(path, "w", encoding="utf-8", newline="") as f:
                 f.write(out)
