@@ -10,6 +10,10 @@
    nothing written and note saying why when a file is missing or does not fit the others: the game's own font stays. */
 int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N], const char *out_path, char *note,
                  size_t note_cap);
+/* (ReLink-R 0.0.14) family "keyboard": dir holds keyboard.txt and keyboard.otf (nx2/keyboard_prompts.py), and binding[]
+   holds the virtual-key code of each Switch button's first key (0 none). prompts_keyboard_table: the size table name
+   keyboard.txt gives (rsizetable.zs replaces System/Resource/<name>), 1, or 0 with why in note */
+int prompts_keyboard_table(const char *dir, char *name, size_t cap, char *note, size_t note_cap);
 /* The label position (prompts.txt's south east west north l1 r1 l2 r2 start back l3 r3, 0 to 11) of a HOS_PAD_* input,
    -1 for an input without a label (the D-pad, Home, none) */
 int prompts_position_of_pad(int pad);

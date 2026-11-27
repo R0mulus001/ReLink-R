@@ -306,6 +306,13 @@ static DWORD WINAPI pad_main(void *arg) {
         Sleep(4);
     }
 }
+/* (ReLink-R 0.0.14) the SDL controllers open now (host/prompts.c: Auto button prompts) */
+int hos_sdl_pad_count(void) {
+    AcquireSRWLockShared(&state_lock);
+    const int n = state_count;
+    ReleaseSRWLockShared(&state_lock);
+    return n;
+}
 #ifndef _WIN32
 int hos_display_owns_sdl(void);   /* host/posix/display_sdl.c */
 /* (linux) SDL also runs the window (host/posix/display_sdl.c), and its event queue is not for two threads. Polled

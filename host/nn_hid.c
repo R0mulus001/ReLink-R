@@ -569,6 +569,17 @@ static void xinput_load(int64_t now) {
     if (!x) x = LoadLibraryA("xinput9_1_0.dll");
     if (x) xinput_get = (XInputGetStateFn)GetProcAddress(x, "XInputGetState");
 }
+/* (ReLink-R 0.0.14, host/prompts.c: Auto button prompts) 1 when a controller is connected: an XInput pad in any slot, or a
+   controller SDL has open */
+int hos_pad_present(void) {
+    xinput_load(hos_now_ns());
+    for (DWORD p = 0; p < XUSER_MAX_COUNT && xinput_get; p++) {
+        XINPUT_STATE xs;
+        if (xinput_get(p, &xs) == ERROR_SUCCESS) return 1;
+    }
+    int hos_sdl_pad_count(void);   /* pad_sdl.c */
+    return hos_sdl_pad_count() > 0;
+}
 /* One pass over the slots that are due (each reader of xin_retry is the one asking thread) */
 static void xinput_poll(int64_t now) {
     xinput_load(now);

@@ -636,14 +636,17 @@ MENU_HINTS(hn_pad_layout, 0, "The Switch's order: A on the right, B at the botto
            "Bindings of your own, from the Controls page.")
 // (relink) Button prompts: the game's button font, made for the family and the bindings at the start (host/prompts.c)
 const char* tx_button_prompts(int v) {
-    static const char* t[] = {"Nintendo", "Xbox", "PlayStation"};
-    return t[std::clamp(v, 0, 2)];
+    static const char* t[] = {"Nintendo", "Xbox", "PlayStation", "Keyboard", "Auto"};   // (ReLink-R 0.0.14: 3, 4)
+    return t[std::clamp(v, 0, 4)];
 }
 MENU_HINTS(hn_button_prompts, 0, "The game's own: the Switch's letters.",
            "A, B, X, Y, LB, RB, LT, RT, Menu and View, drawn by ReLink, the faded letters around the HUD's action button "
            "too. The ocarina's notes keep the Switch's.",
            "Cross, circle, square, triangle, L1, R1, L2, R2, Options and Create, drawn by ReLink, the faded letters around "
-           "the HUD's action button too. The ocarina's notes keep the Switch's.")
+           "the HUD's action button too. The ocarina's notes keep the Switch's.",
+           "The key or mouse button bound to each button on the Controls page, in texts, hints and menus (Kenney's key "
+           "pictures). The HUD's faded letters and the ocarina's notes keep the Switch's.",
+           "Keyboard when no controller is connected as the game starts, the game's own letters when one is.")
 
 // (relink) The keys ReLink's own keyboard actions can take (Menu key, Screenshot key, Fullscreen key), by index: kept in
 // relink_options.ini as these indexes: the list must not change (None is its length). F1 opens the menu too while no other of these rows is F1 (keyboards without Insert)
@@ -782,7 +785,7 @@ Row rows[] = {
      nullptr, false, true},
     {TAB_CONTROLS, "Layout preset", &opts.pad_layout, 0, 3, 1, tx_pad_layout,
      "Which face button is which. Binding one yourself on the Controls page makes it Custom.", hn_pad_layout},
-    {TAB_CONTROLS, "Button prompts", &opts.button_prompts, 0, 2, 1, tx_button_prompts,   // (relink: host/prompts.c)
+    {TAB_CONTROLS, "Button prompts", &opts.button_prompts, 0, 4, 1, tx_button_prompts,   // (relink: host/prompts.c)
      "The buttons the game's prompts show. They follow the Layout preset and your own bindings. Applies the next time the "
      "game starts.", hn_button_prompts, true, true},
     {TAB_CONTROLS, "Controls", nullptr, 0, 0, 0, nullptr,   // (relink: opens its page)

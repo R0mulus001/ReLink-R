@@ -1407,6 +1407,18 @@ def make(romfs, out):
             os.remove(path)
         print(f"button prompts: the ocarina's note buttons not made ({type(e).__name__}: {e}): they stay the Switch's",
               file=sys.stderr)
+    # (ReLink-R 0.0.14: the keyboard's keys, nx2/keyboard_prompts.py; without them Keyboard and Auto keep the game's own font)
+    try:
+        import keyboard_prompts
+        size, game_size, raised = keyboard_prompts.make(romfs, out, orig, wrap, dictionary)
+        print(f"button prompts: the keyboard's keys, {size} bytes (the game's font {game_size}"
+              f"{'; its size table raised: rsizetable.zs' if raised else ''}) in {out}", file=sys.stderr)
+    except Exception as e:
+        for name in ("keyboard.otf", "keyboard.txt", "rsizetable.zs"):   # (keyboard_prompts.FILES)
+            if os.path.exists(os.path.join(out, name)):
+                os.remove(os.path.join(out, name))
+        print(f"button prompts: the keyboard's keys not made ({type(e).__name__}: {e}): Keyboard and Auto show the "
+              f"Switch's", file=sys.stderr)
 
 
 def main(argv=None):
