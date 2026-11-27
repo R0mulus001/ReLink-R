@@ -3555,8 +3555,8 @@ void append_capture_copy(std::vector<VkBufferCopy>& runs, const VkBufferCopy& ne
 // refresh; a page once written by the GPU stays out for good, its live copy as before). A page copied any other way (from a
 // capture, in a segment, kept for the GPU, put off by the lazy write-back, no staging room) loses its hashes. A new mirror
 // (mirror_make) has a new id: no hash of an older one holds. Changed chunks go as the mirror syncs' pass (RX_VK_MSYNC_PASS) reads
-// the captures. RX_VK_MSYNC_DIFF=0 (the default until the owner's check): off, as 0.0.12; 1: hashed and counted, whole pages
-// copied live as before (the measure); 2: changed chunks only. RX_VK_MSYNC_DIFF_GROUP=<1|2|4|8|16> chunks: the copy granularity.
+// the captures. RX_VK_MSYNC_DIFF=0: off, as 0.0.12; 1: hashed and counted, whole pages
+// copied live as before (the measure); 2 (the default since 0.0.14: Market 40.4 -> 50.0 FPS at native 1080p, Silent, 33.7 -> 5.2 MB synced a frame): changed chunks only. RX_VK_MSYNC_DIFF_GROUP=<1|2|4|8|16> chunks: the copy granularity.
 struct DiffPage {
     uint32_t rec = 0;   // (the mirror epoch of the sync that recorded the hashes; 0: none)
     uint32_t mid = 0;   // (the mirror they describe)
@@ -3572,7 +3572,7 @@ uint32_t diff_void_all = 0;                      // (a GPU write too large to no
 int diff_mode() {
     static const int v = [] {
         const char* e = getenv("RX_VK_MSYNC_DIFF");
-        const int m = e ? std::clamp(atoi(e), 0, 2) : 0;
+        const int m = e ? std::clamp(atoi(e), 0, 2) : 2;   // (0.0.14: on by default, after the A/B of 2026-11-27)
         logf("vk: mirror syncs' chunk diff (RX_VK_MSYNC_DIFF=%d): %s", m,
              m == 2 ? "on: the live pages' changed 256-byte chunks only, from a snapshot" : m == 1 ? "measured only, whole pages copied" : "off");
         return m;
