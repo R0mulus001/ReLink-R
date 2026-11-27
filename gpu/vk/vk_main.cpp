@@ -30,6 +30,7 @@
 #include "vk_progress.h"
 #ifdef _WIN32
 #include <dxgi1_6.h>   // (relink: HDR output, hdr_display)
+#include <psapi.h>     // (relink: the shader modules' cost, module_cost_probe)
 #endif
 
 namespace vkx {
@@ -188,6 +189,22 @@ void module_fault(const VkShaderModuleCreateInfo* ci) {
         MessageBoxA(nullptr, text.c_str(), "Project ReLink: graphics driver", MB_OK | MB_ICONWARNING | MB_TOPMOST);
     }).detach();
 }
+// (relink, 0.7.9.4) How many shader modules live and how much SPIR-V they were made from, every 2000 made; RX_VK_MODULE_COST=1:
+// once, what 400 more modules of one shader cost the process in committed memory (the driver's part of a module)
+PFN_vkDestroyShaderModule driver_destroy_shader_module = nullptr;
+std::atomic<int64_t> modules_made{0}, modules_gone{0}, module_bytes{0};
+void module_cost_probe(VkDevice d, const VkShaderModuleCreateInfo* ci) {
+    PROCESS_MEMORY_COUNTERS_EX before{}, after{};
+    std::vector<VkShaderModule> extra(400);
+    GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&before, sizeof before);
+    for (VkShaderModule& x : extra) driver_create_shader_module(d, ci, nullptr, &x);
+    GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&after, sizeof after);
+    for (VkShaderModule x : extra)
+        if (x) driver_destroy_shader_module(d, x, nullptr);
+    logf("vk: shader modules: 400 more of a %zu-byte SPIR-V shader took %.1f MB of committed memory (%.1f KB each)",
+         (size_t)ci->codeSize, ((double)after.PrivateUsage - (double)before.PrivateUsage) / 1048576.0,
+         ((double)after.PrivateUsage - (double)before.PrivateUsage) / 1024.0 / 400);
+}
 VKAPI_ATTR VkResult VKAPI_CALL guarded_create_shader_module(VkDevice d, const VkShaderModuleCreateInfo* ci,
                                                             const VkAllocationCallbacks* a, VkShaderModule* m) {
     int faulted = 0;
@@ -196,12 +213,27 @@ VKAPI_ATTR VkResult VKAPI_CALL guarded_create_shader_module(VkDevice d, const Vk
         if (m) *m = VK_NULL_HANDLE;
         module_fault(ci);
     }
+    if (r == VK_SUCCESS && m && *m) {
+        module_bytes += (int64_t)ci->codeSize;
+        const int64_t n = ++modules_made;
+        static const bool cost = getenv("RX_VK_MODULE_COST") != nullptr;
+        if (cost && (n == 3000 || n == 9000) && ci->codeSize > 4096) module_cost_probe(d, ci);
+        if (n % 2000 == 0)
+            logf("vk: shader modules: %lld made (%.1f MB of SPIR-V), %lld live", (long long)n, module_bytes.load() / 1048576.0,
+                 (long long)(n - modules_gone.load()));
+    }
     return r;
 }
+VKAPI_ATTR void VKAPI_CALL counted_destroy_shader_module(VkDevice d, VkShaderModule m, const VkAllocationCallbacks* a) {
+    if (m) modules_gone++;
+    driver_destroy_shader_module(d, m, a);
+}
 void guard_shader_modules() {
-    if (getenv("RX_VK_NO_MODULE_GUARD") || !vkx::vkCreateShaderModule) return;
+    if (getenv("RX_VK_NO_MODULE_GUARD") || !vkx::vkCreateShaderModule || !vkx::vkDestroyShaderModule) return;
     driver_create_shader_module = vkx::vkCreateShaderModule;
     vkx::vkCreateShaderModule = guarded_create_shader_module;
+    driver_destroy_shader_module = vkx::vkDestroyShaderModule;
+    vkx::vkDestroyShaderModule = counted_destroy_shader_module;
 }
 #else
 void guard_shader_modules() {}
@@ -1191,6 +1223,7 @@ void prepare_with_screen() {
 bool started_up() {
     if (const char* e = getenv("RX_VK_START_DELAY")) Sleep((DWORD)atoi(e) * 1000);   // (diagnosis: a long start, as the first one is)
     if (!replay_start()) return false;
+    texture_pipelines_ahead();
     if (prepare_only()) {
         // (three parts: the programs, the pipelines the notes predict, then those they name; most of the time is the first)
         static int part;

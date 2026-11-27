@@ -57,6 +57,7 @@
 #include "shader_recompiler/backend/spirv/mma_layout.h"
 #include "mesh_conv.h"   // (RX_VK_MESH_CONV: the indirect mesh draws' ring slots and the batch at the game's barriers)
 #include "vk_work.h"   // (after the others: counts the commands that do GPU work, for full_barrier)
+#include <psapi.h>     // (relink: committed memory before and after the compute programs' modules go)
 
 namespace mkwvk {
 // (EvilOOT, RX_VK_DRAW_STATS: the pointer table's regions, vk_bank.cpp)
@@ -935,8 +936,19 @@ std::unordered_map<uint64_t, std::unique_ptr<PipeEntry>> ahead;
 std::deque<uint64_t> ahead_order;   // (ahead_mu: the keys in the order they were made, for the oldest untaken ones to go first)
 int64_t ahead_untaken = 0;          // (ahead_mu: how many of `ahead` hold a pipeline no draw has taken)
 std::atomic<int64_t> st_ahead_made{0}, st_ahead_taken{0}, st_ahead_late{0}, st_ahead_unknown{0}, st_ahead_ms{0};
+// (relink, 0.7.9.4) OFF by default again (RX_VK_EAGER_GRAPHICS=1: on), for what it costs with a WARM driver cache. (Looked at
+// after a player's report on 0.7.9.3, long loads and hangs "when new things are being loaded": not shown to be its cause, see
+// the cold-cache figures below, where both ways are bad.) Measured on the bench with 0.7.9.3's own binaries, the Market, two rounds: in
+// ONE visit 4250 pipelines were made ahead for 970 first draws that found theirs (77 % for nothing), 3.5 s of builds on the
+// background workers with a warm driver cache, and the visit had 372 / 419 late frames, 15 / 32 hitches and a p99 of 20.4 /
+// 21.4 ms against 192 / 153, 5 / 3 and 15.5 / 15.7 ms with it off (the frame rate standing 66 against 76). With the driver's
+// cache cold (an update that prepared the shaders again, and no warm-up: __GL_SHADER_DISK_CACHE_PATH on an empty folder,
+// RX_VK_WARM=0) each one took ~107 ms, 423 s of builds in one run and the Market at 31 ms a frame, while off gave 614 hitches
+// and a freeze of 8.6 s there (each pipeline built at its first draw): the start's warm-up (RX_VK_WARM, on for players) is what
+// makes the cache warm again (160 s once, then 114 fps and 9 hitches there). What it was measured to bring on 19/11 is lost
+// with it: Hyrule Field's camera turn 6 and 8 frames over 25 ms without it against 1 and 2 with, and no draw left out
 bool eager_graphics_on() {
-    static const bool on = !getenv("RX_VK_EAGER_GRAPHICS") || atoi(getenv("RX_VK_EAGER_GRAPHICS")) != 0;
+    static const bool on = getenv("RX_VK_EAGER_GRAPHICS") && atoi(getenv("RX_VK_EAGER_GRAPHICS")) != 0;
     return on;
 }
 std::unique_ptr<PipeEntry> ahead_take(uint64_t own) {
@@ -1690,33 +1702,94 @@ void state_list_prepare(void (*progress)(size_t done, size_t total)) {
     if (other_mode) logf("vk: state list: %zu records noted in the other mesh mode (native or compute fallback) are left to play", other_mode);
 }
 
-// ---- (relink) Stage libraries, as TotK Recomp's runtime/vk_pipeline.c: the part of a pipeline that costs is its shaders, and with
-// VK_EXT_graphics_pipeline_library they are built apart from what a draw adds (vertex layout, target formats). prepare_run builds
-// each program's two shader libraries once, for the driver's own cache to keep; a draw that needs a pipeline nothing has built gets
-// them back from that cache, links them on the spot, and draws at once. The worker's full build then takes over. Needs the blend,
-// polygon, clamp and alpha-to-coverage state dynamic, or those would be in the libraries too. RX_VK_GPL=1: on ----
+// ---- (relink) Stage libraries (VK_EXT_graphics_pipeline_library): the part of a pipeline that costs is its shaders, and with
+// the libraries they are built once a program (pre-rasterization and fragment), apart from what a draw adds (vertex layout,
+// target formats: two small libraries without shaders). A draw that needs a pipeline nothing has made links the four on the
+// spot when its program's shader libraries are there, and draws at once; when they are not, a worker builds them and links
+// (one shader build a program, where full pipelines cost one a state the program is drawn with). Needs the blend, polygon,
+// clamp and alpha-to-coverage state dynamic, or those would be in the libraries too. RX_VK_GPL=1: on
+// (relink, 0.7.9.4) Why: a player's log on 0.7.9.3 (RTX 5060 Ti, driver 617.42) shows the driver's cache not keeping the full
+// pipelines (probed right after the warm-up: median 289 ms, 15 of 16 over 12 ms), and the pipelines made ahead then cost
+// 463 s of builds in one session, 2794 of 6000 for nothing. The libraries are what the ahead step builds instead
+// (gpl_ahead): two a program the game sets, not one a state of the lists
+extern std::atomic<int> compiles_running;
+void compile_note(const char* kind, uint64_t key, std::chrono::steady_clock::time_point t0);
 bool gpl_wanted() {
-    static const bool on = dev.graphics_pipeline_library && dev.eds3_blend && dev.eds3_polygon && dev.eds3_clamp && dev.eds3_a2c &&
-                           getenv("RX_VK_GPL") != nullptr;   // (off until the driver step is safe: linked cold, the libraries stall the draw)
+    static const bool on = [] {
+        const bool can = dev.graphics_pipeline_library && dev.eds3_blend && dev.eds3_polygon && dev.eds3_clamp && dev.eds3_a2c;
+        const char* e = getenv("RX_VK_GPL");
+        const bool v = can && e && atoi(e) != 0;
+        logf("vk: pipeline libraries: %s (this GPU %s them%s; RX_VK_GPL=%s)",
+             v ? "on: shader libraries built a program, linked at the first draw" : "off", can ? "has" : "lacks",
+             can ? "" : " or a dynamic state they need", v ? "0: off" : "1: on");
+        return v;
+    }();
     return on;
 }
-std::mutex gpl_mu;
-std::unordered_map<uint64_t, VkPipeline> gpl_libs;
-VkPipeline gpl_part(const Program& p, const NvnState& s, const Targets& at, VkPrimitiveTopology topo, int part, uint64_t key) {
-    key = mix(key, (uint64_t)part);
-    {
-        std::lock_guard lk(gpl_mu);
-        if (auto it = gpl_libs.find(key); it != gpl_libs.end()) return it->second;
-    }
-    VkPipeline made = build_graphics(p, s, at, topo, part);
-    if (!made) return VK_NULL_HANDLE;
-    std::lock_guard lk(gpl_mu);
-    const auto [it, fresh] = gpl_libs.emplace(key, made);
-    if (!fresh) vkDestroyPipeline(dev.device, made, nullptr);
-    return it->second;
+/// (RX_VK_GPL_FULL=1) the worker's full build over each linked pipeline, as before 0.7.9.4: else the linked one is the final one
+// (on by default: linked alone, Lost Woods' GPU time was 12.2 ms a frame against 10.0 with full pipelines, gpl_b / gpl_a, NVIDIA
+// 616.92. RX_VK_GPL_FULL=0: the linked one stays)
+bool gpl_full() {
+    static const bool on = !getenv("RX_VK_GPL_FULL") || atoi(getenv("RX_VK_GPL_FULL")) != 0;
+    return on;
 }
-VkPipeline gpl_link(const Program& p, const NvnState& s, const Targets& at, VkPrimitiveTopology topo) {
-    const uint64_t program = mix(p.key, p.variant);
+struct GplLib {
+    std::atomic<VkPipeline> pl{VK_NULL_HANDLE};
+    std::atomic<int> state{0};   // 0 not started, 1 being built, 2 done (pl null: the build failed)
+};
+std::mutex gpl_mu;
+std::unordered_map<uint64_t, std::unique_ptr<GplLib>> gpl_libs;
+std::atomic<int64_t> st_gpl_libs{0}, st_gpl_lib_us{0}, st_gpl_shader_libs{0}, st_gpl_shader_us{0}, st_gpl_fast{0},
+    st_gpl_fast_us{0}, st_gpl_slow{0}, st_gpl_ahead{0}, st_gpl_failed{0};
+GplLib* gpl_slot(uint64_t key) {
+    std::lock_guard lk(gpl_mu);
+    auto& s = gpl_libs[key];
+    if (!s) s = std::make_unique<GplLib>();
+    return s.get();
+}
+/// The library of part (0 vertex input, 1 pre-rasterization, 2 fragment shader, 3 fragment output) under key: made here when
+/// nothing has started it and build is set, waited for when another thread builds it, NULL when it is not done and build is not set
+VkPipeline gpl_part(const Program& p, const NvnState& s, const Targets& at, VkPrimitiveTopology topo, int part, uint64_t key,
+                    bool build) {
+    GplLib* g = gpl_slot(mix(key, (uint64_t)part));
+    if (g->state.load(std::memory_order_acquire) == 2) return g->pl.load(std::memory_order_acquire);
+    if (!build) return VK_NULL_HANDLE;
+    int z = 0;
+    if (g->state.compare_exchange_strong(z, 1)) {
+        const bool shader = part == 1 || part == 2;
+        const auto t0 = std::chrono::steady_clock::now();
+        if (shader) compiles_running++;
+        const VkPipeline made = build_graphics(p, s, at, topo, part);
+        if (shader) compiles_running--;
+        const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+        if (shader) {
+            st_gpl_shader_libs++, st_gpl_shader_us += us;
+            compile_note(part == 1 ? "library (pre-rasterization)" : "library (fragment)", p.key, t0);
+        } else {
+            st_gpl_libs++, st_gpl_lib_us += us;
+        }
+        if (!made) st_gpl_failed++;
+        g->pl.store(made, std::memory_order_release);
+        g->state.store(2, std::memory_order_release);
+        return made;
+    }
+    while (g->state.load(std::memory_order_acquire) != 2) std::this_thread::sleep_for(std::chrono::microseconds(500));
+    return g->pl.load(std::memory_order_acquire);
+}
+// (the shader libraries are keyed by the program object too: its pipeline layout is the one they and the link are made with)
+uint64_t gpl_program(const Program& p) { return mix(mix(p.key, p.variant), (uint64_t)(uintptr_t)&p); }
+/// Both shader libraries of p (for at's samples), built here when missing: what the ahead step does
+bool gpl_shaders(const Program& p, const NvnState& s, const Targets& at, VkPrimitiveTopology topo) {
+    const uint64_t program = gpl_program(p);
+    return gpl_part(p, s, at, topo, 1, program, true) && gpl_part(p, s, at, topo, 2, mix(program, (uint64_t)at.samples), true);
+}
+/// The linked pipeline of a draw. shaders: build the shader libraries if they are missing (a worker); without it, NULL when they are
+VkPipeline gpl_link(const Program& p, const NvnState& s, const Targets& at, VkPrimitiveTopology topo, bool shaders) {
+    const uint64_t program = gpl_program(p);
+    // (the shader libraries first: without them nothing else is made)
+    const VkPipeline pre = gpl_part(p, s, at, topo, 1, program, shaders);
+    const VkPipeline frag = pre ? gpl_part(p, s, at, topo, 2, mix(program, (uint64_t)at.samples), shaders) : VK_NULL_HANDLE;
+    if (!pre || !frag) return VK_NULL_HANDLE;
     uint64_t input = (uint64_t)topology_class(topo) + 1;
     if (!p.mesh && !p.fallback) {
         const Shader::Info& vs = p.stages[0].info;
@@ -1729,10 +1802,10 @@ VkPipeline gpl_link(const Program& p, const NvnState& s, const Targets& at, VkPr
     output = mix(output, at.depth ? (uint64_t)at.depth_format : 0);
     VkPipeline libs[4];
     uint32_t n = 0;
-    if (!p.mesh) libs[n++] = gpl_part(p, s, at, topo, 0, input);
-    libs[n++] = gpl_part(p, s, at, topo, 1, program);
-    libs[n++] = gpl_part(p, s, at, topo, 2, mix(program, (uint64_t)at.samples));
-    libs[n++] = gpl_part(p, s, at, topo, 3, output);
+    if (!p.mesh) libs[n++] = gpl_part(p, s, at, topo, 0, input, true);
+    libs[n++] = pre;
+    libs[n++] = frag;
+    libs[n++] = gpl_part(p, s, at, topo, 3, output, true);
     for (uint32_t i = 0; i < n; i++)
         if (!libs[i]) return VK_NULL_HANDLE;
     VkPipelineLibraryCreateInfoKHR li{VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR};
@@ -1744,6 +1817,82 @@ VkPipeline gpl_link(const Program& p, const NvnState& s, const Targets& at, VkPr
     VkPipeline pl = VK_NULL_HANDLE;
     if (vkCreateGraphicsPipelines(dev.device, VK_NULL_HANDLE, 1, &ci, nullptr, &pl) != VK_SUCCESS) return VK_NULL_HANDLE;
     return pl;
+}
+void gpl_report() {
+    static std::atomic<int64_t> last{0};
+    static std::atomic<int> told{0};
+    const int64_t n = st_gpl_fast.load() + st_gpl_slow.load();
+    if (n - last.load() < 500 || told.load() >= 60) return;
+    last = n, told++;
+    const int64_t f = st_gpl_fast.load(), sl = st_gpl_shader_libs.load(), ol = st_gpl_libs.load();
+    logf("vk: pipeline libraries: %lld pipelines linked at their draw (%.2f ms each, with the small libraries made then), %lld "
+         "waited for their program's shader libraries (built on a worker); %lld shader libraries (%.1f ms each; %lld programs set "
+         "by the game had theirs built ahead), %lld small ones (%.2f ms each), %lld failed",
+         (long long)f, f ? st_gpl_fast_us.load() / 1000.0 / f : 0.0, (long long)st_gpl_slow.load(), (long long)sl,
+         sl ? st_gpl_shader_us.load() / 1000.0 / sl : 0.0, (long long)st_gpl_ahead.load(), (long long)ol,
+         ol ? st_gpl_lib_us.load() / 1000.0 / ol : 0.0, (long long)st_gpl_failed.load());
+}
+
+// (relink, 0.7.9.4) Why a draw's shaders come late, every 10 s while any did: draws left out for their program (its records
+// read from the program cache, or its translation) or for their pipeline (the driver's build); pipelines made at a draw, their
+// wait in the queue and their build; programs a draw found not ready, from that first draw to ready
+std::atomic<int64_t> st_skip_prog{0}, st_skip_pipe{0}, st_writer_waits{0}, st_writer_wait_us{0};
+std::atomic<int64_t> st_pt_n{0}, st_pt_queue_us{0}, st_pt_build_us{0}, st_pt_queue_max{0}, st_pt_build_max{0}, st_pt_slow{0};
+std::atomic<int64_t> st_pw_n{0}, st_pw_us{0}, st_pw_max{0}, st_pw_slow{0};
+static void atomic_max(std::atomic<int64_t>& a, int64_t v) {
+    int64_t o = a.load();
+    while (v > o && !a.compare_exchange_weak(o, v)) {}
+}
+void pipe_time_note(std::chrono::steady_clock::time_point asked, std::chrono::steady_clock::time_point t0,
+                    std::chrono::steady_clock::time_point t1) {
+    const int64_t q = std::chrono::duration_cast<std::chrono::microseconds>(t0 - asked).count();
+    const int64_t b = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    st_pt_n++, st_pt_queue_us += q, st_pt_build_us += b;
+    atomic_max(st_pt_queue_max, q), atomic_max(st_pt_build_max, b);
+    if (q + b > 20000) st_pt_slow++;
+}
+std::mutex prog_wait_mu;
+std::unordered_map<const Program*, std::chrono::steady_clock::time_point> prog_wait;
+std::atomic<int> prog_wait_n{0};
+void prog_wait_note(const Program* p) {
+    std::lock_guard lk(prog_wait_mu);
+    if (prog_wait.emplace(p, std::chrono::steady_clock::now()).second) prog_wait_n++;
+}
+/// (a draw's thread, once a frame) the programs waited for that are ready now, and the report
+void late_shaders_tick() {
+    static thread_local uint64_t frame = ~0ull;
+    if (texture_frame_no() == frame) return;
+    frame = texture_frame_no();
+    const auto now = std::chrono::steady_clock::now();
+    if (prog_wait_n.load(std::memory_order_relaxed)) {
+        std::lock_guard lk(prog_wait_mu);
+        for (auto it = prog_wait.begin(); it != prog_wait.end();) {
+            if (it->first->ready.load(std::memory_order_acquire)) {
+                const int64_t us = std::chrono::duration_cast<std::chrono::microseconds>(now - it->second).count();
+                st_pw_n++, st_pw_us += us;
+                atomic_max(st_pw_max, us);
+                if (us > 20000) st_pw_slow++;
+                it = prog_wait.erase(it), prog_wait_n--;
+            } else {
+                ++it;
+            }
+        }
+    }
+    static std::atomic<int64_t> next_report{0};
+    static int64_t l_skip_prog, l_skip_pipe, l_pt_n, l_pw_n;
+    const int64_t t = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    int64_t nr = next_report.load();
+    if (t < nr || !next_report.compare_exchange_strong(nr, t + 10000)) return;
+    const int64_t sp = st_skip_prog.load(), sk = st_skip_pipe.load(), ptn = st_pt_n.load(), pwn = st_pw_n.load();
+    if (sp == l_skip_prog && sk == l_skip_pipe && ptn == l_pt_n && pwn == l_pw_n) return;
+    l_skip_prog = sp, l_skip_pipe = sk, l_pt_n = ptn, l_pw_n = pwn;
+    logf("vk: late shaders: draws left out %lld for their program, %lld for their pipeline; %lld pipelines made at a draw "
+         "(queue %.1f ms avg / %.0f max, build %.1f ms avg / %.0f max, %lld over 20 ms); %lld programs a draw waited for "
+         "(%.1f ms avg / %.0f max from that draw to ready, %lld over 20 ms, %d still waited for); %lld waits of writers (%.0f ms)",
+         (long long)sp, (long long)sk, (long long)ptn, ptn ? st_pt_queue_us.load() / 1000.0 / ptn : 0.0,
+         st_pt_queue_max.load() / 1000.0, ptn ? st_pt_build_us.load() / 1000.0 / ptn : 0.0, st_pt_build_max.load() / 1000.0,
+         (long long)st_pt_slow.load(), (long long)pwn, pwn ? st_pw_us.load() / 1000.0 / pwn : 0.0, st_pw_max.load() / 1000.0,
+         (long long)st_pw_slow.load(), prog_wait_n.load(), (long long)st_writer_waits.load(), st_writer_wait_us.load() / 1000.0);
 }
 
 /// The pipeline entry of a draw (a new one is queued for a worker; RX_VK_SYNC_PIPELINES=1 builds it here)
@@ -1929,15 +2078,43 @@ PipeEntry* graphics_pipeline(const Program& p, const NvnState& s, const Targets&
         e->ready = true;
         return remember(e);
     }
-    // (linked here, from the libraries: the draw goes ahead, and the worker's full build replaces it when it is done)
+    // (linked here when the program's shader libraries are made: the draw goes ahead at once. Else a worker builds them and links,
+    // and the draw waits for that as it waited for a full build. RX_VK_GPL_FULL=1: the worker's full build replaces the linked one)
     if (gpl_wanted() && !p.fallback) {
         const auto t0 = std::chrono::steady_clock::now();
-        const VkPipeline linked = gpl_link(p, s, at, topo);
-        st_link_us += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
-        st_links++;
+        const VkPipeline linked = gpl_link(p, s, at, topo, false);
         if (linked) {
+            st_gpl_fast++;
+            st_gpl_fast_us += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
             e->pipeline = linked;
             e->ready.store(true, std::memory_order_release);
+            gpl_report();
+            if (!gpl_full()) return remember(e);
+        } else {
+            st_gpl_slow++;
+            gpl_report();
+            struct LinkJob {
+                PipeEntry* e;
+                const Program* p;
+                NvnState s;
+                Targets at;
+                VkPrimitiveTopology topo;
+            };
+            auto job = std::make_shared<LinkJob>();
+            job->e = e, job->p = &p, job->s = s, job->at = at, job->topo = topo;
+            jobs_push([job] {
+                VkPipeline pl = gpl_link(*job->p, job->s, job->at, job->topo, true);
+                if (!pl || gpl_full()) {   // (a failed library: the full build, as without them)
+                    const auto t0 = std::chrono::steady_clock::now();
+                    compiles_running++;
+                    if (const VkPipeline full = build_graphics(*job->p, job->s, job->at, job->topo)) pl = full;
+                    compiles_running--;
+                    compile_note("graphics", job->p->key, t0);
+                }
+                job->e->pipeline = pl;
+                job->e->ready.store(true, std::memory_order_release);
+            }, false, &e->ready);
+            return remember(e);
         }
     }
     struct Job {
@@ -1949,7 +2126,8 @@ PipeEntry* graphics_pipeline(const Program& p, const NvnState& s, const Targets&
     };
     auto job = std::make_shared<Job>();
     job->e = e, job->p = &p, job->s = s, job->at = at, job->topo = topo;
-    jobs_push([job] {
+    const auto asked = std::chrono::steady_clock::now();
+    jobs_push([job, asked] {
         // (over a linked one, which is left alone: draws recorded with it may still be on their way)
         const auto t0 = std::chrono::steady_clock::now();
         compiles_running++;
@@ -1957,6 +2135,7 @@ PipeEntry* graphics_pipeline(const Program& p, const NvnState& s, const Targets&
         compiles_running--;
         compile_note("graphics", job->p->key, t0);
         job->e->ready.store(true, std::memory_order_release);
+        pipe_time_note(asked, t0, std::chrono::steady_clock::now());
     }, false, &e->ready);   // (a draw that waits for it runs it at once if it is still queued: jobs_wait)
     return remember(e);
 }
@@ -6539,8 +6718,9 @@ void mesh_conv_batch(VkCommandBuffer cmd, const mesh_conv::Item* items, size_t n
 void mesh_conv_stats(int64_t out[7]) {
     for (int i = 0; i < kMcCount; i++) out[i] = st_mc[i].exchange(0, std::memory_order_relaxed);
 }
-namespace {
-} // namespace
+// (ReLink-R 0.0.13) Upstream 0.7.9.4's mesh_convert_ahead (RX_VK_INDIRECT_AHEAD) is not taken: it converts the same draws at the
+// same barriers as RX_VK_MESH_CONV=2 above (Longshot 9027e7374 via HeyListen c9603f66, in ReLink-R since 0.0.6), with a ring of
+// its own layout in the same buffer; both on would convert every such draw twice.
 // (relink) NVN's indirect mesh draws hold (count, first) and Vulkan's (x, y, z): given as they were, every one drew y = first = 0 workgroups,
 // with no error. They are most of the game's vegetation: the forest's trees, ferns and grass (GPU culling writes their counts, so they can only
 // be moved on the GPU): each count is copied into this buffer of (count, 1, 1) just before its draw. The GPU runs the copies and draws in
@@ -6648,7 +6828,8 @@ bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
     const uint64_t records = capacity * 4 +
                              capacity * (uint64_t)p.fallback_vertices_per_workgroup * p.fallback_record_words * 4;
     if (records > (512ull << 20)) return false;
-    const uint64_t payload = p.fallback_task ? capacity * 4 + capacity * (uint64_t)p.fallback_payload_words * 4 : 0;
+    // (+ the compaction's list of started slots, vk_mesh_split.h)
+    const uint64_t payload = p.fallback_task ? capacity * 4 + capacity * (uint64_t)p.fallback_payload_words * 4 + capacity * 4 : 0;
     FallbackPool& pool = fallback_pool();
     if (fallback_cur.ok && fallback_cur_gen == pool.gen.load(std::memory_order_acquire) && records <= fallback_cur_records &&
         payload <= fallback_cur_payload) {
@@ -6680,7 +6861,7 @@ bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
             if (ok) made.payload_address = fallback_buffer_address(made.payload);
         }
         if (ok && !share) {   // (an indirect draw's batches' arguments, vk_mesh_split.h)
-            const uint64_t args = ((uint64_t)kMeshSplitHeadWords + (uint64_t)kFallbackBatches * kMeshSplitBatchWords) * 4;
+            const uint64_t args = ((uint64_t)kMeshSplitHeadWords + (uint64_t)kFallbackBatches * kMeshSplitBatchWords + kFallbackCompactWords) * 4;
             ok = create_buffer(args, usage | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, false, made.args, made.args_mem, &mapped);
             if (ok) made.args_address = fallback_buffer_address(made.args);
         }
@@ -6853,9 +7034,21 @@ bool fallback_batch(VkCommandBuffer cmd, Program& p, uint32_t b) {
     const uint32_t capacity = Shader::Backend::SPIRV::MESH_FALLBACK_CAPACITY;
     end_pass(cmd);
     full_barrier(cmd);
-    vkCmdFillBuffer(cmd, f->records, 0, (VkDeviceSize)capacity * 4, 0);   // (the slots this batch runs)
-    // (the payloads too: a mesh workgroup the task did not start still runs, and reads its payload's words)
-    if (f->payload && p.fallback_task) vkCmdFillBuffer(cmd, f->payload, 0, VK_WHOLE_SIZE, 0);
+    {   // (RX_VK_PASS_TIMING: the fallback's steps named, where they were time between spans)
+        GprofSpan gp(cmd, "fbfill records");
+        vkCmdFillBuffer(cmd, f->records, 0, (VkDeviceSize)capacity * 4, 0);   // (the slots this batch runs)
+    }
+    // (relink, 0.7.9.4) The payloads are no longer cleared: only the slots a task started run their mesh workgroup now (the
+    // compaction below), and those read the payload their task wrote. The compaction's arguments: x counted from 0, and for a
+    // direct batch the slots it looks at
+    const VkDeviceSize compact_at = ((VkDeviceSize)kMeshSplitHeadWords + (VkDeviceSize)kFallbackBatches * kMeshSplitBatchWords) * 4;
+    if (p.fallback_task) {
+        GprofSpan gp(cmd, "fbfill compaction");
+        vkCmdFillBuffer(cmd, f->args, compact_at, 12, 0);
+        const uint32_t base0 = b * plan.per_batch;
+        const uint32_t n0 = plan.indirect ? 0 : std::min(plan.groups - std::min(plan.groups, base0), plan.per_batch);
+        vkCmdFillBuffer(cmd, f->args, compact_at + 12, 4, n0 * plan.threads);
+    }
     full_barrier(cmd);
     if (!bind_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p)) return false;
     push_constants(cmd, p, nullptr);
@@ -6870,6 +7063,7 @@ bool fallback_batch(VkCommandBuffer cmd, Program& p, uint32_t b) {
     const uint32_t n = plan.indirect ? 0 : std::min(plan.groups - std::min(plan.groups, base), plan.per_batch);
     const auto send = [&](size_t stage, uint32_t word, uint32_t count) {
         if (stage >= p.fallback_compute.size() || !p.fallback_compute[stage]) return false;
+        GprofSpan gp(cmd, word == kMeshSplitTaskWord ? "fbtask dispatch" : "fbmesh dispatch");
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.fallback_compute[stage]);
         if (plan.indirect) vkCmdDispatchIndirect(cmd, f->args, fallback_args_at(b, word));
         else if (count) vkCmdDispatch(cmd, count, 1, 1);
@@ -6878,7 +7072,30 @@ bool fallback_batch(VkCommandBuffer cmd, Program& p, uint32_t b) {
     if (p.fallback_task) {   // (a task workgroup's slots are its index in the batch * threads + thread)
         if (!send(stages[0], kMeshSplitTaskWord, n)) return false;
         full_barrier(cmd);
-        if (!send(stages[1], kMeshSplitMeshWord, n * plan.threads)) return false;   // (a slot each; the task's flags cull those it did not start)
+        // (the slots it started listed, and a mesh workgroup for each of them only: vk_mesh_split.h, MeshFallbackSlot)
+        VkPipeline compact = VK_NULL_HANDLE;
+        VkPipelineLayout compact_layout = VK_NULL_HANDLE;
+        if (!fallback_compact_pipeline(&compact, &compact_layout) || stages[1] >= p.fallback_compute.size() || !p.fallback_compute[stages[1]])
+            return false;
+        {
+            GprofSpan gp(cmd, "fbcompact dispatch");
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compact);
+            FallbackCompactPush cp{};
+            cp.payload = f->payload_address;
+            cp.args_out = f->args_address + compact_at;
+            cp.count_addr = plan.indirect ? f->args_address + fallback_args_at(b, kMeshSplitMeshWord) : cp.args_out + 12;
+            cp.list_word = capacity * (1 + p.fallback_payload_words);
+            vkCmdPushConstants(cmd, compact_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof cp, &cp);
+            vkCmdDispatch(cmd, (capacity + 63) / 64, 1, 1);
+        }
+        full_barrier(cmd);
+        // (the program's own bindings again: the compaction's layout came between)
+        if (!bind_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p)) return false;
+        push_constants(cmd, p, nullptr);
+        vkCmdPushConstants(cmd, p.layout, p.push_stages, Shader::Backend::SPIRV::MESH_FALLBACK_BASE_PUSH_OFFSET, 4, &base);
+        GprofSpan gp(cmd, "fbmesh dispatch");
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p.fallback_compute[stages[1]]);
+        vkCmdDispatchIndirect(cmd, f->args, compact_at);
     } else if (!send(stages[0], kMeshSplitMeshWord, n)) {
         return false;
     }
@@ -7329,6 +7546,7 @@ static bool program_writes_memory(const Program& p) {
 static bool mesh_batch_live() { return mesh_batch.live(); }
 
 void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
+    late_shaders_tick();
     // (relink, diagnostic, the frame's slack map) RX_VK_SKIP_ALL_DRAWS=1: every draw left out before any work (the picture is
     // wrong): what the frame rate would be with a replay that costs nothing for its draws
     static const bool skip_all = getenv("RX_VK_SKIP_ALL_DRAWS") && atoi(getenv("RX_VK_SKIP_ALL_DRAWS")) != 0;
@@ -7580,9 +7798,10 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         }
     };
     if (!cp->ready.load(std::memory_order_acquire)) {
-        if (may_skip) return void(st_pending_skips++);
+        prog_wait_note(cp);
+        if (may_skip) return void((st_pending_skips++, st_skip_prog++));
         wait_for(cp->ready);
-        if (left_out) return void(st_pending_skips++);
+        if (left_out) return void((st_pending_skips++, st_skip_prog++));
     }
     // (relink) a cached program's stand-in, its records now read (vk_shader.cpp): the pick again finds the variant read, or
     // starts its translation as before
@@ -7593,9 +7812,10 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         }
         if (!cp) SKIP_HERE();
         if (!cp->ready.load(std::memory_order_acquire)) {
-            if (may_skip) return void(st_pending_skips++);
+            prog_wait_note(cp);
+            if (may_skip) return void((st_pending_skips++, st_skip_prog++));
             wait_for(cp->ready);
-            if (left_out) return void(st_pending_skips++);
+            if (left_out) return void((st_pending_skips++, st_skip_prog++));
         }
     }
     if (exposure_log_on() && cp) exposure_note(s, *cp);
@@ -7633,11 +7853,14 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
                 for (const auto& ib : in.image_buffer_descriptors) writes |= ib.is_written;
             }
         if (writes) {
+            const auto tw = std::chrono::steady_clock::now();
             jobs_wait(pe->ready);
+            st_writer_wait_us += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - tw).count();
+            st_writer_waits++;
         } else {
-            if (may_skip) return void(st_pending_skips++);
+            if (may_skip) return void((st_pending_skips++, st_skip_pipe++));
             wait_for(pe->ready);
-            if (left_out) return void(st_pending_skips++);
+            if (left_out) return void((st_pending_skips++, st_skip_pipe++));
         }
     }
     const VkPipeline pl = pe->pipeline;
@@ -9348,6 +9571,21 @@ void precompile_run(void (*progress)(size_t done, size_t total)) {
         for (std::thread& t : threads) t.detach();
     } else {
         for (std::thread& t : threads) t.join();
+        // (relink, 0.7.9.4) The compute programs' shader modules, once their pipelines are made: nothing builds from them again
+        // (each builder in play looks for the pipeline first), and the driver keeps each one's code, ~4000 of them at a start
+        // made of 300 MB of SPIR-V. A program whose pipeline failed keeps its module. RX_VK_KEEP_MODULES=1: kept, as before
+        if (!getenv("RX_VK_KEEP_MODULES")) {
+            PROCESS_MEMORY_COUNTERS_EX m0{}, m1{};
+            GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&m0, sizeof m0);
+            size_t gone = 0;
+            for (Program* p : pre->computes)
+                if (p->compute_pipeline && !taau_key(p->key))
+                    for (Stage& st : p->stages)
+                        if (st.module) vkDestroyShaderModule(dev.device, st.module, nullptr), st.module = VK_NULL_HANDLE, gone++;
+            GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&m1, sizeof m1);
+            logf("vk: %zu shader modules of compute programs let go, their pipelines made: committed memory %.0f -> %.0f MB "
+                 "(RX_VK_KEEP_MODULES=1: kept)", gone, m0.PrivateUsage / 1048576.0, m1.PrivateUsage / 1048576.0);
+        }
         delete pre;
         pipeline_cache_slim();   // (relink: every pipeline the cache was read for is made)
     }
@@ -9722,6 +9960,136 @@ void eager_graphics(const nvn_prog& prog) {
                  (long long)st_ahead_failed.load(), (long long)st_ahead_dropped.load());
     }
 }
+// (relink, 0.7.9.4) With the pipeline libraries: a program the game sets gets its shader libraries built ahead, two a program
+// variant the state lists draw it with (and their sample counts), where eager_graphics built one pipeline a state. The draws then
+// link theirs at once. RX_VK_GPL_AHEAD=0: off (the libraries are built at the first draw)
+bool gpl_ahead_on() {
+    // (off by default: the libraries of every program the game sets kept the workers busy, and a cold driver cache then froze
+    // the Market 12 s, gpl_a_Bc. RX_VK_GPL_AHEAD=1: on)
+    static const bool on = gpl_wanted() && pipelines_lean() && getenv("RX_VK_GPL_AHEAD") && atoi(getenv("RX_VK_GPL_AHEAD")) != 0;
+    return on;
+}
+void gpl_ahead(const nvn_prog& prog) {
+    uint64_t code[4];
+    bool mesh = false;
+    if (!program_set_codes(prog, code, &mesh)) return;
+    uint64_t ch = mesh ? 0x9E3779B97F4A7C15ull : 0xCBF29CE484222325ull;
+    for (int k = 0; k < 4; k++) ch = mix(ch, code[k]);
+    {
+        static std::mutex mu;
+        static std::unordered_set<uint64_t> seen;   // (stages already done: the same program set again, or another object of it)
+        std::lock_guard lk(mu);
+        if (!seen.insert(ch).second) return;
+    }
+    const auto& list = ahead_list();
+    const auto range = list.equal_range(ch);
+    struct Item { const StateRec* r; uint64_t key; };
+    std::vector<Item> items;
+    std::unordered_set<uint64_t> keys;
+    for (auto it = range.first; it != range.second; ++it) {
+        const StateRec& r = it->second;
+        if (std::memcmp(r.code, code, sizeof r.code) || (r.mesh != 0) != mesh) continue;
+        if (const uint64_t key = program_set_key(prog, r.vattr, r.color_types)) items.push_back({&r, key}), keys.insert(key);
+    }
+    if (items.empty()) return;
+    for (const uint64_t key : keys) program_cache_fetch(key, mesh, mesh && dev.uses_mesh_fallback(code[2] != 0));
+    auto s = std::make_unique<NvnState>();
+    std::unordered_set<uint64_t> done;   // (a program object and sample count: its two libraries)
+    for (const Item& item : items) {
+        const StateRec& r = *item.r;
+        const Program* p = program_find(item.key, r.variant);
+        if (!p || p->compute || p->failed || p->fallback) continue;
+        Targets at{};
+        state_of_record(r, *s, at);
+        if (!done.insert(mix((uint64_t)(uintptr_t)p, (uint64_t)at.samples)).second) continue;
+        ensure_layout(const_cast<Program&>(*p));   // (its own lock)
+        if (gpl_shaders(*p, *s, at, (VkPrimitiveTopology)r.topo)) st_gpl_ahead++;
+    }
+}
+// (relink, 0.7.9.4) Programs read ahead: when the game sets a program (as an area loads, before its first draw), its variants
+// the state lists name are read from the program cache on a background worker: records, then shader modules. Pipelines are
+// still made at the first draw (1.9 ms each with the driver's cache warm). Measured before it (late_w1, warm caches, first
+// visits of Kakariko, Hyrule Castle, Deku Tree, Hyrule Field): 1166 programs were not there at their first draw, 105 ms on
+// average to be read (523 at most, 933 over 20 ms), and 2807 draws were left out for them; the pipelines themselves took
+// 1.9 ms. What 0.7.9.3's ahead step cost was its pipelines (one a state of the lists, 77 % never drawn), not these reads.
+// RX_VK_PROG_AHEAD=0: off (read at the first draw)
+bool programs_ahead_on() {
+    static const bool on = pipelines_lean() && (!getenv("RX_VK_PROG_AHEAD") || atoi(getenv("RX_VK_PROG_AHEAD")) != 0);
+    return on;
+}
+std::atomic<int64_t> st_pa_sets{0}, st_pa_keys{0}, st_pa_us{0};
+void programs_ahead(const nvn_prog& prog) {
+    uint64_t code[4];
+    bool mesh = false;
+    {   // (as the pipelines made ahead did: none once the system has less than 3 GB of commit left)
+        static std::atomic<bool> low{false};
+        if (low.load()) return;
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof ms;
+        if (GlobalMemoryStatusEx(&ms) && (ms.ullAvailPageFile >> 20) < 3072) {
+            if (!low.exchange(true))
+                logf("vk: programs read ahead: stopped, the system has %llu MB of commit left; the rest are read at their first "
+                     "draw", (unsigned long long)(ms.ullAvailPageFile >> 20));
+            return;
+        }
+    }
+    if (!program_set_codes(prog, code, &mesh)) return;   // (let go meanwhile, or a compute program)
+    uint64_t ch = mesh ? 0x9E3779B97F4A7C15ull : 0xCBF29CE484222325ull;
+    for (int k = 0; k < 4; k++) ch = mix(ch, code[k]);
+    {
+        static std::mutex mu;
+        static std::unordered_set<uint64_t> seen;   // (these stages read once: programs stay, and a read record leaves the index)
+        std::lock_guard lk(mu);
+        if (!seen.insert(ch).second) return;
+    }
+    const auto& list = ahead_list();
+    const auto range = list.equal_range(ch);
+    std::unordered_set<uint64_t> keys;
+    for (auto it = range.first; it != range.second; ++it) {
+        const StateRec& r = it->second;
+        if (std::memcmp(r.code, code, sizeof r.code) || (r.mesh != 0) != mesh) continue;
+        if (const uint64_t key = program_set_key(prog, r.vattr, r.color_types)) keys.insert(key);
+    }
+    if (keys.empty()) return;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (const uint64_t key : keys) program_cache_fetch(key, mesh, mesh && dev.uses_mesh_fallback(code[2] != 0));
+    st_pa_keys += (int64_t)keys.size();
+    st_pa_us += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+    static std::atomic<int> told{0};
+    if (const int64_t n = ++st_pa_sets; n % 250 == 0 && told++ < 40)
+        logf("vk: programs read ahead of their first draw: %lld programs the game set, %lld program keys (%.1f ms each)",
+             (long long)n, (long long)st_pa_keys.load(), st_pa_keys.load() ? st_pa_us.load() / 1000.0 / st_pa_keys.load() : 0.0);
+}
+// (one thread of its own at the lowest priority, one program at a time: run on the background workers, side by side, the reads
+// went on 2 to 4 s into an area's play, and its frames had more hitches of 27 to 43 ms than without them (pa_on1 / pa_on2))
+void programs_ahead_push(const nvn_prog& prog) {
+    static std::mutex mu;
+    static std::condition_variable cv;
+    static std::deque<nvn_prog> queue;
+    static std::once_flag started;
+    std::call_once(started, [] {
+        std::thread([] {
+#ifdef _WIN32
+            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+#endif
+            for (;;) {
+                nvn_prog next;
+                {
+                    std::unique_lock lk(mu);
+                    cv.wait(lk, [] { return !queue.empty(); });
+                    next = queue.front();
+                    queue.pop_front();
+                }
+                programs_ahead(next);
+            }
+        }).detach();
+    });
+    {
+        std::lock_guard lk(mu);
+        queue.push_back(prog);
+    }
+    cv.notify_one();
+}
 /// The game lets a program object go (the replay thread, after the draws that used it): the last one of its stages takes the
 /// pipelines made ahead that no draw took with it
 void eager_graphics_released(const nvn_prog* p) {
@@ -9762,6 +10130,9 @@ void eager_compute_request(const nvn_prog* p) {
     // of one stage may be either: eager_compute leaves one without a compute stage alone, eager_graphics one with)
     if (on && p->nstage == 1) jobs_push_background([copy] { eager_compute(copy); });   // (behind the pipelines draws wait on)
     if (eager_graphics_on() && pipelines_lean()) jobs_push_background([copy] { eager_graphics(copy); });
+    if (gpl_ahead_on() && !eager_graphics_on()) jobs_push_background([copy] { gpl_ahead(copy); });
+    // (the programs only, where neither ahead step above reads them)
+    else if (programs_ahead_on() && !eager_graphics_on()) programs_ahead_push(copy);
 }
 
 void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {

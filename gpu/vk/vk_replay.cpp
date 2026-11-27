@@ -205,7 +205,24 @@ VkResult submit_recording_to_queue(const VkSubmitInfo2* si, VkFence fence) {
             logf("vk: the device is lost: %lld recordings not sent to it since", (long long)n);
         return VK_ERROR_DEVICE_LOST;
     }
-    return vkQueueSubmit2(dev.queue, 1, si, fence);
+    DriverTurn turn;   // (the reaper waits for it: vk_vma.cpp reap_wait_turn)
+    // (0.7.9.4, RX_VK_SUBMIT_STATS=1, diagnostic: how long the driver holds a submit, every 2000 of them)
+    static const bool stats = getenv("RX_VK_SUBMIT_STATS") != nullptr;
+    if (!stats) return vkQueueSubmit2(dev.queue, 1, si, fence);
+    const auto t0 = std::chrono::steady_clock::now();
+    const VkResult r = vkQueueSubmit2(dev.queue, 1, si, fence);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static std::mutex mu;
+    static int64_t n, over1, over4;
+    static double total, worst;
+    std::lock_guard lk(mu);
+    n++, total += ms, worst = std::max(worst, ms), over1 += ms > 1.0, over4 += ms > 4.0;
+    if (n % 2000 == 0) {
+        logf("vk: submits: %lld, %.3f ms on average, %lld over 1 ms, %lld over 4 ms, longest %.2f ms (since the last line)",
+             (long long)n, total / 2000, (long long)over1, (long long)over4, worst);
+        total = 0, worst = 0, over1 = over4 = 0;
+    }
+    return r;
 }
 
 // ---- (test) RX_VK_BATCH=1: the replay's submits held and sent as one vkQueueSubmit2 ----
@@ -1269,6 +1286,7 @@ void log_stage_bind(uint32_t op, int stage) {
 void maybe_split(VkCommandBuffer& cmd);
 void split_part(VkCommandBuffer& cmd);   // (a part's end: maybe_split says when, replay() on Intel, right before a plain draw)
 bool part_end_wanted = false;
+bool part_end_at_pass = false;   // (0.7.9.4: the part ends at the game's next barrier or render target change: maybe_split)
 
 /// The handles already stored, so a rebind of the same ones does not rebuild descriptors
 bool handles_unchanged(const uint64_t* have, const uint64_t* next, int n) {
@@ -1331,6 +1349,8 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
         if (!dry && !worker && part_end_wanted && (h.op == NOP_DRAW || h.op == NOP_DRAW_IDX || h.op == NOP_DRAW_INDIRECT) &&
             s.render_enabled && !s.raster_discard)
             split_part(cmd);
+        // (0.7.9.4) the part's end maybe_split put off to the game's own pass end: here, where the pass ends anyway
+        if (!dry && !worker && part_end_at_pass && (h.op == NOP_BARRIER || h.op == NOP_SET_RT)) split_part(cmd);
         switch (h.op) {
         case NOP_END: return;
         case NOP_BEGIN: case NOP_JUMP: case NOP_CALL: break;
@@ -1800,6 +1820,7 @@ void replay(VkCommandBuffer& cmd, NvnState& s, const uint8_t* p, const uint8_t* 
             game_barrier(cmd, payload<int32_t>(a, avail));   // (ReLink-R 0.0.7, RX_VK_GAME_BARRIERS: as strong as its flags ask)
             mesh_conv_at_barrier(cmd, p + h.size, end);   // (ReLink-R 0.0.6, RX_VK_MESH_CONV=2)
             st_barriers++;
+            // (ReLink-R 0.0.13: upstream 0.7.9.4's mesh_convert_ahead here is not taken: RX_VK_MESH_CONV=2 just above does it, vk_draw.cpp)
             break;
         // ---- work ----
         case NOP_CLEAR_COLOR:
@@ -1952,12 +1973,21 @@ void maybe_split(VkCommandBuffer& cmd) {
         part_end_wanted = true;
         return;
     }
+    // (relink, 0.7.9.4) A part ended after its 120th draw ended the game's render pass there: the next part began the same pass
+    // again (load of every target, a second begin), and a pass cut in two costs the GPU its tiling and the replay a pass's setup.
+    // It now ends at the game's next pass end (a barrier or a render target change: replay()), unless the pass goes on for four
+    // parts' worth of draws, as the forest's 1200-draw ones do: then here, as before. RX_VK_SPLIT_AT_PASS=0: always here
+    static const bool at_pass = !(getenv("RX_VK_SPLIT_AT_PASS") && atoi(getenv("RX_VK_SPLIT_AT_PASS")) == 0);
+    if (at_pass && part_work < every * 4) {
+        part_end_at_pass = true;
+        return;
+    }
     split_part(cmd);
 }
 
 /// The recording's part ends here and the submission goes on in a new one (maybe_split says when)
 void split_part(VkCommandBuffer& cmd) {
-    part_end_wanted = false;
+    part_end_wanted = false, part_end_at_pass = false;
     // (asked for in another command buffer of the submission: what maybe_split refuses is refused here too)
     if (!rec_cur || rec_parts + 1 >= kMaxParts || dump_on()) return;
     end_pass(cmd);
@@ -2418,7 +2448,7 @@ void bench_replay(const std::vector<uint64_t>& handles) {
     Recording& first = begin_recording(value);
     memory_begin_submission();
     full_barrier(first.cmd);
-    rec_cur = &first, rec_cur_value = value, rec_parts = 0, part_work = 0, part_end_wanted = false;
+    rec_cur = &first, rec_cur_value = value, rec_parts = 0, part_work = 0, part_end_wanted = false, part_end_at_pass = false;
     VkCommandBuffer cmd = first.cmd;
     for (uint64_t h : handles)
         if (h) replay(cmd, *cur_state, reinterpret_cast<const uint8_t*>(h));
@@ -2705,7 +2735,7 @@ bool run_submit(const uint64_t* handles, int n, uint64_t value, uint64_t queue, 
         texture_defrag_step();   // (relink, RX_VK_DEFRAG: nothing recorded yet)
         memory_begin_submission();
         full_barrier(first.cmd, "barrier (recording start)");
-        rec_cur = &first, rec_cur_value = tag, rec_parts = 0, part_work = 0, part_end_wanted = false;
+        rec_cur = &first, rec_cur_value = tag, rec_parts = 0, part_work = 0, part_end_wanted = false, part_end_at_pass = false;
     }
     VkCommandBuffer cmd = rec_cur->cmd;
     const uint8_t* stop = nullptr;
@@ -4531,9 +4561,24 @@ static bool present_one(VkImage src, uint32_t sw, uint32_t sh, const int crop[4]
     const bool was_held = fence_mode && held_image.held;
     if (fence_mode && !was_held && !acquire_fence_ready()) return false;   // (no fence to acquire with: the frame is not shown)
     VkResult res = VK_SUCCESS;
+    const auto acq0 = std::chrono::steady_clock::now();
     if (was_held) index = held_image.index;   // (acquired at an earlier present and not free then: no other acquire meanwhile)
     else if (fence_mode) res = vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, VK_NULL_HANDLE, acquire_fence, &index);
     else res = vkAcquireNextImageKHR(dev.device, dev.swapchain, acquire_timeout, f.acquired, VK_NULL_HANDLE, &index);
+    {   // (0.7.9.4, RX_VK_SUBMIT_STATS=1, diagnostic: how long the presenting thread waits in the acquire, every 1000 presents)
+        static const bool stats = getenv("RX_VK_SUBMIT_STATS") != nullptr;
+        if (stats) {
+            static int64_t n, over1;
+            static double total, worst;
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acq0).count();
+            n++, total += ms, worst = std::max(worst, ms), over1 += ms > 1.0;
+            if (n % 1000 == 0) {
+                logf("vk: acquires: %lld, %.3f ms on average, %lld over 1 ms, longest %.2f ms (%s; since the last line)", (long long)n,
+                     total / 1000, (long long)over1, worst, fence_mode ? "fence" : "semaphore");
+                total = 0, worst = 0, over1 = 0;
+            }
+        }
+    }
 #ifndef _WIN32
     if (res == VK_TIMEOUT || res == VK_NOT_READY) {
         if (!unseen) logf("vk: the window is not shown (no image back in 100 ms): frames are not shown until it is");
@@ -4644,6 +4689,7 @@ static bool present_one(VkImage src, uint32_t sw, uint32_t sh, const int crop[4]
         std::memcpy(r0, st_reason, sizeof r0);
     }
     reflex_submit_ends();
+    DriverTurn turn;   // (through the present below: vk_vma.cpp reap_wait_turn)
     const VkResult blit_res = vkQueueSubmit2(dev.queue, 1, &si, f.done);
     // (relink) The present below waits for the semaphore this submit signals: with the submit refused it waited for a signal that
     // never came, on the presents' own queue, where nothing else notices. This frame is not shown (RX_VK_PRESENT_CHECK=0: as before)

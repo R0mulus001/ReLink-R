@@ -840,6 +840,23 @@ VkImage bc_scratch2 = VK_NULL_HANDLE;
 VmaAllocation bc_scratch2_alloc = nullptr;
 VkImageView bc_scratch2_view = VK_NULL_HANDLE;
 bool bc_scratch2_fresh = false;
+// (relink, 0.7.9.4) The scratch's memory seen as 1024 x 1024 x 4 layers (the same 16 MB as its 2048 x 2048 x 1, and the encoder's
+// buffer holds 4 such layers' blocks): the levels of 1024 and less of a texture array decode and re-encode 4 layers a run, not
+// one, with no more VRAM. An array of 90 terrain layers is 90 runs of three full barriers each for each such level otherwise.
+// On NVIDIA's driver by default (runs of layers gave AMD's Windows driver dark lines on Hyrule Field's ground, the cause not
+// known); RX_VK_BC_SMALL_RUNS=0 off, =1 on any GPU. Not with RX_VK_BC_IDLE_S (the scratch given back) or RX_VK_BC_LAYERS
+constexpr uint32_t kBcSmallDim = 1024, kBcSmallLayers = 4;
+VkImage bc_small = VK_NULL_HANDLE;
+VkImageView bc_small_view = VK_NULL_HANDLE;
+bool bc_small_fresh = false;
+bool bc_small_wanted() {
+    static const bool on = [] {
+        const char* e = getenv("RX_VK_BC_SMALL_RUNS");
+        const bool v = e ? atoi(e) != 0 : dev.props.vendorID == 0x10DE;
+        return v && !getenv("RX_VK_BC_LAYERS") && !(getenv("RX_VK_BC_IDLE_S") && atoi(getenv("RX_VK_BC_IDLE_S")));
+    }();
+    return on;
+}
 // (the scratch and its buffer, 160 MB, are made when an upload first needs them and given back after RX_VK_BC_IDLE_S seconds
 // (20) without one: a title or a load decodes hundreds of textures through them, steady gameplay few (the "given back" line says
 // whether it did).
@@ -883,6 +900,25 @@ bool bc_scratch_make() {   // (bc_mu held)
     }
     bc_scratch_fresh = true;
     bc_have = true;
+    if (bc_small_wanted()) {   // (0.7.9.4: the same memory as 1024 x 1024 x 4, when it fits there)
+        VkImageCreateInfo si = ii;
+        si.extent = {kBcSmallDim, kBcSmallDim, 1};
+        si.arrayLayers = kBcSmallLayers;
+        VkImageViewCreateInfo sv = vi;
+        if (create_aliasing_image(bc_scratch_alloc, si, bc_small)) {
+            sv.image = bc_small;
+            sv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kBcSmallLayers};
+            if (vkCreateImageView(dev.device, &sv, nullptr, &bc_small_view) == VK_SUCCESS) {
+                bc_small_fresh = true;
+                logf("vk: the BC3 scratch also decodes 4 layers of 1024 x 1024 a run (RX_VK_BC_SMALL_RUNS=0: one layer)");
+            } else {
+                vkDestroyImage(dev.device, bc_small, nullptr);
+                bc_small = VK_NULL_HANDLE;
+            }
+        } else {
+            logf("vk: the BC3 scratch's memory does not take 4 layers of 1024 x 1024: one layer a run");
+        }
+    }
     return true;
 }
 
@@ -1018,6 +1054,21 @@ bool bc_scratch_layout(VkCommandBuffer cmd, bool resized = false) {
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image = bc_scratch2;
         b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, bc_layers()};
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.imageMemoryBarrierCount = 1;
+        di.pImageMemoryBarriers = &b;
+        vkCmdPipelineBarrier2(cmd, &di);
+    }
+    if (bc_small_fresh && bc_small) {   // (0.7.9.4: the small scratch, once made)
+        bc_small_fresh = false;
+        VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = bc_small;
+        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, kBcSmallLayers};
         VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
         di.imageMemoryBarrierCount = 1;
         di.pImageMemoryBarriers = &b;
@@ -1239,13 +1290,30 @@ bool upload_astc_gpu(Texture& tex, uint64_t total, const Ranges* dirty) {
                 // smaller levels, and Hyrule Field's ground, which samples the terrain's material arrays (1365 x 1365 x 90, ASTC
                 // 8x8) at those levels from a distance, had its tiles outlined in dark lines (RX 6600: none with one layer a run,
                 // nor with the arrays kept as RGBA8). RX_VK_BC_LAYERS=<n>: up to n a run)
-                static const uint32_t run = bc_layers();
+                static const uint32_t big_run = bc_layers();
+                // (0.7.9.4: a level of 1024 and less goes 4 layers a run through the small scratch, bc_small)
+                const bool small = bc_small_view && !tex.bc_resized && g.w <= kBcSmallDim && g.h <= kBcSmallDim;
+                const uint32_t run = small ? kBcSmallLayers : big_run;
                 while (k1 < layers.size() && k1 - k0 < run && layers[k1] == layers[k1 - 1] + 1) k1++;
                 const uint32_t n = (uint32_t)(k1 - k0);
+                if (bc_small_view) {   // (0.7.9.4: two images over one memory: the one used now starts from UNDEFINED, as Vulkan asks
+                    // of an alias after the other was written; its old contents are not wanted, the run overwrites what it reads)
+                    VkImageMemoryBarrier2 ab{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+                    ab.srcStageMask = ab.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                    ab.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    ab.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+                    ab.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, ab.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    ab.srcQueueFamilyIndex = ab.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    ab.image = small ? bc_small : bc_scratch;
+                    ab.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, small ? kBcSmallLayers : bc_layers()};
+                    VkDependencyInfo adi{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+                    adi.imageMemoryBarrierCount = 1, adi.pImageMemoryBarriers = &ab;
+                    vkCmdPipelineBarrier2(cmd, &adi);
+                }
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, astc_pipe);
                 const uint64_t from = slot_of(k0) + off;
                 VkDescriptorBufferInfo bi{src_buf, src_base + from, src_size - from};
-                VkDescriptorImageInfo ii{VK_NULL_HANDLE, bc_scratch_view, VK_IMAGE_LAYOUT_GENERAL};
+                VkDescriptorImageInfo ii{VK_NULL_HANDLE, small ? bc_small_view : bc_scratch_view, VK_IMAGE_LAYOUT_GENERAL};
                 VkWriteDescriptorSet w[2]{{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}, {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}};
                 w[0].dstBinding = 0, w[0].descriptorCount = 1, w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                 w[0].pBufferInfo = &bi;
@@ -1260,7 +1328,7 @@ bool upload_astc_gpu(Texture& tex, uint64_t total, const Ranges* dirty) {
                 if (tex.bc_resized)
                     bc_encode_resized(cmd, g.w, g.h, iw, ih, n, tex, level, layers[k0]);
                 else
-                    bc_encode_into(cmd, iw, ih, n, tex, level, layers[k0], 0, 0);
+                    bc_encode_into(cmd, iw, ih, n, tex, level, layers[k0], 0, 0, small ? bc_small_view : VK_NULL_HANDLE);
                 k0 = k1;
             }
         }
@@ -1684,6 +1752,19 @@ bool upload_all_zero(Texture& tex, uint64_t total, const Ranges* dirty, bool wid
 // RX_VK_ASTC_ASYNC=0: as before, on the replay thread; RX_VK_ASTC_ASYNC_MIN_K=<thousands of texels> (default 1024): the
 // smallest texture, in texels over its levels and layers, decoded in the background
 }  // namespace (igpu-fix: the background job's types are the namespace's own, as Texture names AsyncTex)
+// (relink, 0.7.9.4) The texture decoders' two compute pipelines made at the start, before the game, on a GPU that does not
+// sample ASTC, instead of at the first ASTC texture's upload, on the presenting thread in the title's first seconds (a cold
+// driver cache builds them there). RX_VK_TEX_PIPES_LATE=1: at the first upload, as before
+void texture_pipelines_ahead() {
+    if (getenv("RX_VK_TEX_PIPES_LATE")) return;
+    VkFormatProperties p{};
+    vkGetPhysicalDeviceFormatProperties(dev.physical, VK_FORMAT_ASTC_4x4_UNORM_BLOCK, &p);
+    if (p.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) return;   // (sampled as they are)
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool astc = astc_ready(), bc = astc && bc_ready();
+    logf("vk: texture decoders made before the game (ASTC %d, BC3 %d) in %.1f ms", (int)astc, (int)bc,
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+}
 struct AsyncPart {
     uint32_t level = 0, layer = 0, w = 0, h = 0;
     std::vector<uint8_t> blocks;   // (the ASTC blocks, unswizzled)
@@ -2749,6 +2830,47 @@ Texture* create(const Key& key, const nvn_tex* t, VkFormat vf, bool astc, int bw
         } else if (bc_candidate && (bc_ready() || (astc_cpu_bc() && !x.sparse))) {   // (igpu-fix: or encoded on the CPU)
             x.bc = true;
             x.format = VK_FORMAT_BC3_UNORM_BLOCK;
+            // (0.7.9.4, RX_VK_ASTC_ALPHA_SCAN=1, diagnostic) how many of the textures kept as BC3 have no ASTC block that can
+            // carry alpha (every block's colour endpoint modes among L / RGB ones, or a void-extent block of full alpha): what
+            // BC1 (8 bytes a block, BC3's colour half) would save on them
+            static const bool scan = getenv("RX_VK_ASTC_ALPHA_SCAN") != nullptr;
+            if (scan) {
+                static std::mutex smu;
+                static uint64_t n_all, n_opaque, mb_all_b, mb_opaque_b, scan_ns;
+                const auto s0 = std::chrono::steady_clock::now();
+                const uint64_t size = t->L.size;
+                std::vector<uint8_t> scratch;
+                const uint8_t* b = size ? guest_bytes(t->gpu, size, scratch) : nullptr;
+                bool opaque = b != nullptr;
+                for (uint64_t o = 0; opaque && o + 16 <= size; o += 16) {
+                    uint64_t lo, hi;
+                    memcpy(&lo, b + o, 8), memcpy(&hi, b + o + 8, 8);
+                    if (!lo && !hi) continue;   // (padding)
+                    if ((lo & 0x1FF) == 0x1FC) {   // (void extent: LDR and full alpha only)
+                        if ((lo >> 9) & 1 || (hi >> 48) != 0xFFFF) opaque = false;
+                        continue;
+                    }
+                    if ((lo & 0xF) == 0 && ((lo >> 2) & 3) == 0 && ((lo >> 5) & 0xF) == 0) continue;   // (reserved: an error block)
+                    const uint32_t parts = (uint32_t)((lo >> 11) & 3) + 1;
+                    uint32_t cem;
+                    if (parts == 1) cem = (uint32_t)((lo >> 13) & 0xF);
+                    else {
+                        const uint32_t f = (uint32_t)((lo >> 23) & 0x3F);
+                        if (f & 3) { opaque = false; break; }   // (modes differ by partition: not followed, taken as alpha)
+                        cem = f >> 2;
+                    }
+                    if (!(cem == 0 || cem == 1 || cem == 6 || cem == 8 || cem == 9)) opaque = false;
+                }
+                std::lock_guard lk(smu);
+                n_all++, mb_all_b += px * x.layers;
+                if (opaque) n_opaque++, mb_opaque_b += px * x.layers;
+                scan_ns += (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - s0).count();
+                if (n_all % 64 == 0)
+                    logf("vk: ASTC alpha scan: %llu textures kept as BC3 (%llu MB), %llu of them with no alpha in their blocks (%llu MB: "
+                         "%llu MB less as BC1); %.1f ms of scans", (unsigned long long)n_all, (unsigned long long)(mb_all_b >> 20),
+                         (unsigned long long)n_opaque, (unsigned long long)(mb_opaque_b >> 20), (unsigned long long)(mb_opaque_b >> 21),
+                         scan_ns / 1e6);
+            }
         }
     }
     const VkFormatProperties fp = format_props(x.format);

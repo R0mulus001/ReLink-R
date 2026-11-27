@@ -5,6 +5,13 @@ fixes on top of its releases. Releases and updates of this fork come from
 [R0mulus001/ReLink-R](https://github.com/R0mulus001/ReLink-R/releases); report this fork's bugs here, not upstream.
 
 Changes against upstream:
+- **0.0.13-dev**: on top of upstream **0.7.9.4** (pipelines made at their first draw, shaders read ahead while an area loads,
+  the neighbouring area held when Link steps back, frees off the submit path, faster multi-layer ASTC on NVIDIA, Xbox pads on
+  their own thread). New, to test: the mirror syncs copy only the 256-byte pieces of the game's memory that changed, from a
+  snapshot, instead of whole pages (after HeyListen's TICK-048; the Market copied ~34 MB a frame, 9.4 ms of graphics-card
+  time): `RX_VK_MSYNC_DIFF=2` turns it on, off by default until checked. ReLink-R 0.0.5's own area hold gives way to
+  upstream's (`HOS_OCB_RULE=0` for the old one); upstream's mesh-argument batching is left out, ReLink-R's `RX_VK_MESH_CONV`
+  does the same.
 - **0.0.12-dev**: measuring only, no change to how the game runs. The log now says how long the graphics card sits idle
   waiting for work each frame and how long its texture uploads take (`RX_VK_GPU_GAPS`), the frame times by millisecond every
   5 s so the 1 % low and the frames over 20 and 50 ms can be read (`HOS_FRAME_STATS`), and which map Link is in

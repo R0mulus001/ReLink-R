@@ -259,6 +259,11 @@ bool create_image(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& al
     note_image(allocation, ci);
     return true;
 }
+/// (relink, 0.7.9.4) an image over the memory of another's allocation (vk_texture.cpp's small BC3 scratch); false when it does
+/// not fit there
+bool create_aliasing_image(VmaAllocation over, const VkImageCreateInfo& ci, VkImage& image) {
+    return vmaCreateAliasingImage(vma, over, &ci, &image) == VK_SUCCESS;
+}
 bool create_image_raw(const VkImageCreateInfo& ci, VkImage& image, VmaAllocation& allocation, bool dedicated) {
     VmaAllocationCreateInfo ai{};
     ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
@@ -421,6 +426,28 @@ void destroy_or_defer(VkImage image, VmaAllocation allocation) {
     }
     destroy_image_now(image, allocation);
 }
+// (relink, 0.7.9.4) The driver keeps one lock for a device's object creations and destructions, its memory frees and the
+// queue's submits and presents (seen as a submit that waits while another thread destroys): a destruction made while the
+// replay submits or the frame is presented holds that submit up for the destruction's millisecond or more. The reaper waits
+// for those to end, 3 ms at most, before each driver call of its own. RX_VK_REAP_TURNS=0: it does not wait
+std::atomic<int> driver_turns{0};
+void reap_wait_turn() {
+    static const bool on = !(getenv("RX_VK_REAP_TURNS") && atoi(getenv("RX_VK_REAP_TURNS")) == 0);
+    if (!on || driver_turns.load(std::memory_order_acquire) == 0) return;
+    static std::atomic<int64_t> waits{0}, gave_up{0};
+    const auto t0 = std::chrono::steady_clock::now();
+    while (driver_turns.load(std::memory_order_acquire) > 0) {
+        if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(3)) {
+            gave_up++;
+            break;
+        }
+        std::this_thread::yield();
+    }
+    const int64_t n = ++waits;
+    if (!(n & (n - 1)) && n >= 64)
+        logf("vk: the reaper let %lld submits or presents go first (%lld waits of 3 ms given up)", (long long)n,
+             (long long)gave_up.load());
+}
 bool reap_on() {
     static const bool on = [] {
         const char* e = getenv("RX_VK_REAP");
@@ -434,7 +461,7 @@ bool reap_on() {
                     reap_cv.wait(lk, [] { return !reap_queue.empty(); });
                     batch.swap(reap_queue);
                 }
-                for (auto& fn : batch) fn(), reap_pending--;
+                for (auto& fn : batch) reap_wait_turn(), fn(), reap_pending--;
                 batch.clear();
             }
         }).detach();

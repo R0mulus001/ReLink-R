@@ -26,4 +26,18 @@ struct MeshSplitPush {
 /// The program that makes the batches' arguments (made once; false when it could not be)
 bool mesh_split_pipeline(VkPipeline* pipeline, VkPipelineLayout* layout);
 
+// (relink, 0.7.9.4) The task fallback's compaction: after the task dispatch, the slots its workgroups started (their payload's
+// first word set, TaskEpilogue) are listed after the payloads, at list_word, and the mesh dispatch's arguments (count, 1, 1) are
+// written at args_out, for an indirect dispatch of those slots only (MeshFallbackSlot reads the list). One invocation a slot.
+// The slots it looks at: the word at count_addr (an indirect batch's mesh dispatch x, or a word the CPU filled with the batch's)
+constexpr uint32_t kFallbackCompactWords = 4;   // (at the end of the arguments buffer: x, y, z, the slots for a direct batch)
+struct FallbackCompactPush {
+    uint64_t payload;      // (the payload buffer's device address)
+    uint64_t args_out;     // (the mesh dispatch's arguments, kFallbackCompactWords words)
+    uint64_t count_addr;   // (the slots to look at)
+    uint32_t list_word;    // (where the list starts in the payload buffer, in words)
+    uint32_t pad = 0;
+};
+bool fallback_compact_pipeline(VkPipeline* pipeline, VkPipelineLayout* layout);
+
 } // namespace mkwvk
