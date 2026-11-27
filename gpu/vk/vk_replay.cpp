@@ -2432,6 +2432,13 @@ const uint8_t* replay_handle(VkCommandBuffer& cmd, const uint8_t* h, bool may_st
         logf("vk: parallel replay, the part before the threads (ReLink-R 0.0.14): the mirrors' pre-sync %.2f ms, the part "
              "before's submit %.2f ms, the rest %.2f ms (a command buffer)", presync_ms / 240, presubmit_ms / 240,
              (setup_ms - presync_ms - presubmit_ms) / 240);
+        {
+            double pools, clean, walked, dirty, clean_ms, dirty_ms;
+            memory_presync_stats(&pools, &clean, &walked, &dirty, &clean_ms, &dirty_ms);
+            logf("vk: parallel replay, the mirrors' pre-sync (ReLink-R 0.0.14): %.1f pools synced, %.1f of them with no dirty page "
+                 "(%.2f ms), the others %.2f ms; %.0f pages walked in all syncs, %.0f dirty (a command buffer)", pools / 240,
+                 clean / 240, clean_ms / 240, dirty_ms / 240, walked / 240, dirty / 240);
+        }
         presync_ms = presubmit_ms = 0;
         dry_ms = seg_ms = segs_n = wait_ms = locks_n = 0;
         setup_ms = wake_ms = rec_sum_ms = rec_max_ms = last_ms = submit_ms = tail_ms = 0;

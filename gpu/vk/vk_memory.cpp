@@ -3654,6 +3654,8 @@ struct DiffStats {
 } dst_;
 
 /// The pages of the pool the CPU wrote since its mirror's sync, copied in (the upload command buffer)
+// (ReLink-R 0.0.14) the pre-sync's counts (memory_presync_stats): the replay thread's alone
+int64_t ps_pools, ps_clean, ps_walked, ps_dirty, ps_dirty_here, ps_clean_ns, ps_dirty_ns;
 void mirror_sync(Pool& p) {
     p.synced_epoch = mirror_epoch;
     p.sync_seg = texture_segment();
@@ -3686,6 +3688,7 @@ void mirror_sync(Pool& p) {
         const uint32_t pg = page_gen(page);
         const bool dirty = pg > p.synced_gen;
         if (dirty) p.cpu_dirty_epoch = mirror_epoch;
+        ps_walked++, ps_dirty_here += dirty;   // (ReLink-R 0.0.14: memory_presync_stats)
         if (dirty && gpu_page(page)) {   // (diagnostic: see memory_stamp_gpu)
             st_sync_gpu_pages++;
             gpu_over_by_pool[p.lo]++;
@@ -4855,9 +4858,19 @@ void memory_sync_mirrors_before_segments() {
     for (auto& kv : imported) {
         Pool& p = kv.second;
         if (p.mstate != Pool::MIRROR_ON || p.synced_epoch == mirror_epoch) continue;
+        const auto t0 = std::chrono::steady_clock::now();   // (ReLink-R 0.0.14: memory_presync_stats)
+        ps_dirty_here = 0;
         mirror_sync(p);
+        const int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
+        ps_pools++, ps_dirty += ps_dirty_here;
+        if (ps_dirty_here) ps_dirty_ns += ns; else ps_clean++, ps_clean_ns += ns;
         p.sync_seg = 0;
     }
+}
+void memory_presync_stats(double* pools, double* clean, double* walked, double* dirty, double* clean_ms, double* dirty_ms) {
+    *pools = (double)ps_pools, *clean = (double)ps_clean, *walked = (double)ps_walked, *dirty = (double)ps_dirty;
+    *clean_ms = ps_clean_ns / 1e6, *dirty_ms = ps_dirty_ns / 1e6;
+    ps_pools = ps_clean = ps_walked = ps_dirty = ps_clean_ns = ps_dirty_ns = 0;
 }
 
 /// A pool's mirror made, filled in the recording's upload command buffer: all of it, then the pages a capture holds
