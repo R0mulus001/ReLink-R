@@ -646,7 +646,8 @@ MENU_HINTS(hn_button_prompts, 0, "The game's own: the Switch's letters.",
            "the HUD's action button too. The ocarina's notes keep the Switch's.",
            "The key or mouse button bound to each button on the Controls page, in texts, hints and menus (Kenney's key "
            "pictures). The HUD's faded letters and the ocarina's notes keep the Switch's.",
-           "Keyboard when no controller is connected as the game starts, the game's own letters when one is.")
+           "The device you use: the keyboard's keys while you play with it, the game's own letters while you use a "
+           "controller, switching as you go (a prompt on screen changes when the game shows it again).")
 
 // (relink) The keys ReLink's own keyboard actions can take (Menu key, Screenshot key, Fullscreen key), by index: kept in
 // relink_options.ini as these indexes: the list must not change (None is its length). F1 opens the menu too while no other of these rows is F1 (keyboards without Insert)
