@@ -1413,6 +1413,14 @@ def make(romfs, out):
         size, game_size, raised = keyboard_prompts.make(romfs, out, orig, wrap, dictionary)
         print(f"button prompts: the keyboard's keys, {size} bytes (the game's font {game_size}"
               f"{'; its size table raised: rsizetable.zs' if raised else ''}) in {out}", file=sys.stderr)
+        try:   # (the HUD cross's letters for the keyboard: without them they stay the Switch's)
+            kpath, kn = keyboard_prompts.make_keytex_keys(romfs, dictionary, out)
+            print(f"button prompts: the HUD cross's keys ({kn} masks) in {kpath}", file=sys.stderr)
+        except Exception as e:
+            if os.path.exists(os.path.join(out, "keytex_keys.bin")):
+                os.remove(os.path.join(out, "keytex_keys.bin"))
+            print(f"button prompts: the HUD cross's keys not made ({type(e).__name__}: {e}): they stay the Switch's",
+                  file=sys.stderr)
     except Exception as e:
         for name in ("keyboard.otf", "keyboard.txt", "rsizetable.zs"):   # (keyboard_prompts.FILES)
             if os.path.exists(os.path.join(out, name)):

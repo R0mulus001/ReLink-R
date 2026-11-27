@@ -3701,6 +3701,7 @@ int menu_item_count(int i) { return i >= 0 && i < kItems ? item_counts[i].load(s
 int menu_link_age() { return link_age.load(std::memory_order_relaxed); }
 void menu_option_set(int id, int value) {
     if (id == HOS_PROMPTS_TEX_ID) return prompt_tex_announce(value);   // (relink: the button font's family and bindings, host/prompts.c)
+    if (id == HOS_PROMPTS_KEYS_ID || id == HOS_PROMPTS_KEYS_Y_ID) return prompt_tex_keys(id, value);   // (ReLink-R 0.0.14)
     if (id == OOT_CHEAT_AGE_ID) {   // (relink: the Travel page's list is of Link's age)
         if (link_age.exchange(value, std::memory_order_relaxed) != value && page == 6) menu_refresh = true;
         return;

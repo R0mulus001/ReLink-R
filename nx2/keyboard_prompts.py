@@ -227,4 +227,86 @@ def make(romfs, out, orig, wrap, dictionary):
     return len(font), len(orig), table is not None
 
 
-FILES = ("keyboard.otf", "keyboard.txt", "rsizetable.zs")
+FILES = ("keyboard.otf", "keyboard.txt", "rsizetable.zs", "keytex_keys.bin")
+
+
+# ---- (ReLink-R 0.0.14) The HUD cross's faded letters for the keyboard: the key bound to Switch A, B, X and Y --------------
+KEY_CAP = 1.55   # (a keycap's height against the game's letters' cap height: its letter then reads about as large as theirs)
+
+
+def keytex_key_mask(name, target):
+    """Kenney's glyph name as a 64 x 64 coverage mask, its ink box centred on the game's letters' (button_glyphs.keytex_target)
+    and KEY_CAP times their cap height tall"""
+    cx, cy, cap, _ = target
+    _, cs = keyboard_glyphs.GLYPHS[name]
+    b = bg.bbox(cs)
+    s = cap * KEY_CAP / max(b[3] - b[1], 1)
+    s = min(s, (bg.KEYTEX_SIZE - 4) / max(b[2] - b[0], 1))   # (a wide key, Space or Shift: no wider than the texture)
+    mx, my = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    cov = bg.raster(cs, bg.KEYTEX_SIZE, bg.KEYTEX_SIZE, lambda q: (cx + (q[0] - mx) * s, cy - (q[1] - my) * s))
+    return outlined(cov, max(2, round(target[3] * 0.6)))
+
+
+def outlined(cov, ring):
+    """a solid keycap's coverage (64 x 64, its letter cut out) as the game's letters are drawn, strokes on nothing: the key's
+    outline, ring pixels thick, and its letter or symbol (what the keycap cuts out of itself)"""
+    n = bg.KEYTEX_SIZE
+    solid = [c >= 128 for c in cov]
+    outside = [False] * (n * n)   # (reached from the texture's edge through the keycap's background)
+    stack = [i for i in range(n * n) if (i < n or i >= n * (n - 1) or i % n in (0, n - 1)) and not solid[i]]
+    for i in stack:
+        outside[i] = True
+    while stack:
+        i = stack.pop()
+        x = i % n
+        for j in ((i - 1) if x else -1, (i + 1) if x < n - 1 else -1, i - n, i + n):
+            if 0 <= j < n * n and not outside[j] and not solid[j]:
+                outside[j] = True
+                stack.append(j)
+    dist = [0 if o else 10 ** 6 for o in outside]   # (steps from the outside, up to ring)
+    for _ in range(ring):
+        nd = dist[:]
+        for i in range(n * n):
+            if dist[i]:
+                x, y = i % n, i // n
+                m = min(dist[(i - 1) if x else i], dist[(i + 1) if x < n - 1 else i], dist[i - n if y else i],
+                        dist[i + n if y < n - 1 else i])
+                nd[i] = min(dist[i], m + 1)
+        dist = nd
+    out = bytearray(n * n)
+    for i in range(n * n):
+        if outside[i]:
+            continue
+        out[i] = cov[i] if dist[i] <= ring else 255 - cov[i]   # (the outline: the keycap's edge; inside it, its letter)
+    return bytes(out)
+
+
+def write_keytex_keys(path, masks, index):
+    """keytex_keys.bin, little-endian: "RLKK", u16 version 1, u16 masks n, u16 width 64, u16 height 64; then 256 bytes, the
+    mask of each virtual-key code (0..255; every code has one: Kenney's ANY key for a key it has no picture of); then the n
+    masks, 2,048 bytes of BC4 blocks each (rows of 4 x 4 blocks, top down, as keytex.bin's); then the 64-bit FNV-1a hash of
+    all the bytes before it (gpu/vk/prompt_tex.h KeyTable)"""
+    out = bytearray(b"RLKK" + struct.pack("<4H", 1, len(masks), bg.KEYTEX_SIZE, bg.KEYTEX_SIZE))
+    out += bytes(index)
+    for m in masks:
+        if len(m) != bg.KEYTEX_SIZE * bg.KEYTEX_SIZE // 2:
+            raise bg.Unfit("a key mask of the wrong size")
+        out += m
+    out += struct.pack("<Q", bg.fnv1a64(bytes(out)))
+    with open(path, "wb") as f:
+        f.write(out)
+
+
+def make_keytex_keys(romfs, dictionary, out):
+    """keytex_keys.bin into out: (path, masks); raises on any failure"""
+    target = bg.keytex_target(bg.game_keytex(pa.read_zs(romfs, bg.BNTX, dictionary)))
+    names = sorted(keyboard_glyphs.GLYPHS)
+    if len(names) > 255:
+        raise bg.Unfit("more key pictures than an index of a byte")
+    pos = {n: i for i, n in enumerate(names)}
+    masks = [bg.bc4_encode(keytex_key_mask(n, target), bg.KEYTEX_SIZE, bg.KEYTEX_SIZE) for n in names]
+    anyi = pos[kk.kenney_name(-1)]
+    index = [pos.get(kk.kenney_name(vk), anyi) for vk in range(256)]
+    path = os.path.join(out, "keytex_keys.bin")
+    write_keytex_keys(path, masks, index)
+    return path, len(masks)

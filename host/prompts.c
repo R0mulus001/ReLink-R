@@ -418,11 +418,16 @@ void rx_option_set(int id, int value);                       /* rx_backend.c */
 /* What the font was given, for the renderer's HUD cross letters (gpu/vk/prompt_tex.h): HOS_PROMPTS_TEX_VALUE, -1 not
    decided yet */
 static volatile LONG tex_value = -1;
+static volatile LONG keys_abx = 0, keys_y = 0;   /* (ReLink-R 0.0.14: the keyboard face's keys of Switch A, B, X and Y) */
 
 /* The renderer told what the font was given (the family, 0 when the game's own font stays, and Switch A, B, X and Y's
    inputs); rx_backend.c rx_start calls it again once the renderer is there, for a font opened before that */
 void hos_prompts_announce(void) {
     const LONG v = InterlockedCompareExchange(&tex_value, -1, -1);
+    if (v >= 0 && (v & 3) == FAM_KEYBOARD) {   /* (ReLink-R 0.0.14: the keys before the family, which latches them) */
+        rx_option_set(HOS_PROMPTS_KEYS_ID, (int)InterlockedCompareExchange(&keys_abx, 0, 0));
+        rx_option_set(HOS_PROMPTS_KEYS_Y_ID, (int)InterlockedCompareExchange(&keys_y, 0, 0));
+    }
     if (v >= 0) rx_option_set(HOS_PROMPTS_TEX_ID, (int)v);
 }
 
@@ -503,9 +508,13 @@ static void decide(void) {
             }
         }
     }
-    /* (the HUD cross's letters follow what the font was given: the pad family when its font was made, else the game's own;
-       the keyboard's face keeps the game's letters there) */
-    InterlockedExchange(&tex_value, HOS_PROMPTS_TEX_VALUE(cache[0] && !keyboard ? fam : 0, pad[HOS_SW_A], pad[HOS_SW_B],
+    /* (the HUD cross's letters follow what the font was given: its family when its font was made, else the game's own; the
+       keyboard's face: the keys bound to Switch A, B, X and Y, prompts/keytex_keys.bin) */
+    if (keyboard && cache[0]) {
+        InterlockedExchange(&keys_abx, HOS_PROMPTS_KEYS_VALUE(binding[HOS_SW_A], binding[HOS_SW_B], binding[HOS_SW_X]));
+        InterlockedExchange(&keys_y, binding[HOS_SW_Y] & 255);
+    }
+    InterlockedExchange(&tex_value, HOS_PROMPTS_TEX_VALUE(cache[0] ? fam : 0, pad[HOS_SW_A], pad[HOS_SW_B],
                                                           pad[HOS_SW_X], pad[HOS_SW_Y]));
     hos_prompts_announce();
 }
