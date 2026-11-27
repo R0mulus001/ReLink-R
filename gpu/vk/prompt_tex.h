@@ -28,6 +28,9 @@
    and to Y, announced before HOS_PROMPTS_TEX_ID (the first of which latches them): the masks are prompts/keytex_keys.bin's */
 #define HOS_PROMPTS_KEYS_ID 4090
 #define HOS_PROMPTS_KEYS_Y_ID 4091
+/* (ReLink-R 0.0.14) Auto's: the device in use (1 the keyboard, 2 a controller), at the start before HOS_PROMPTS_TEX_ID and at each
+   change: the cross shows the keys' masks while the keyboard is in use, the game's own letters while a controller is */
+#define HOS_PROMPTS_DEVICE_ID 4092
 #define HOS_PROMPTS_KEYS_VALUE(a, b, x) (((a) & 255) | (((b) & 255) << 8) | (((x) & 255) << 16))
 #define HOS_PROMPTS_TEX_VALUE(family, a, b, x, y)                                                                       \
     (((family) & 3) | ((((a) + 1) & 31) << 2) | ((((b) + 1) & 31) << 7) | ((((x) + 1) & 31) << 12) |                \
@@ -139,6 +142,13 @@ public:
         if (id == HOS_PROMPTS_KEYS_ID) keys_abx_.store(v);
         else keys_y_.store(v);
     }
+    /// (ReLink-R 0.0.14, Auto) the device in use: a change moves the generation, and the four letters are uploaded again
+    void device(int d) {
+        live_.store(true);
+        if (live_keys_.exchange(d != 2) != (d != 2)) gen_.fetch_add(1);
+    }
+    /// (the generation the four letters were last chosen at: a texture uploaded at another one is uploaded again)
+    int gen() const { return gen_.load(); }
 
     /// The host's announcement (HOS_PROMPTS_TEX_VALUE): the first one counts; the family and the bindings are latched
     /// then, and keytex.bin read when the family is not 0
@@ -178,6 +188,7 @@ public:
         }
         const int i = which(table_, blocks);
         if (family_ == 3) {   // (ReLink-R 0.0.14: the key bound to that Switch button, its mask)
+            if (i >= 0 && live_.load() && !live_keys_.load()) return 2;   // (Auto, a controller in use: the game's own letter)
             if (i < 0 || key_[i] <= 0 || key_[i] > 255) return 0;
             std::memcpy(blocks, keys_.masks.data() + (size_t)keys_.index[key_[i]] * kBlocks, kBlocks);
             if (!used_.exchange(true)) log_(shows_.c_str());
@@ -250,6 +261,8 @@ private:
     KeyTable keys_;
     int key_[4] = {};
     std::atomic<int> keys_abx_{0}, keys_y_{0};
+    std::atomic<bool> live_{false}, live_keys_{true};   // (ReLink-R 0.0.14, Auto)
+    std::atomic<int> gen_{0};
     std::atomic<int> announced_{-1};
     std::once_flag read_, latch_;
     Table table_;
@@ -265,6 +278,8 @@ namespace mkwvk {
 // (gpu/vk/vk_prompt_tex.cpp: the renderer's one Replacer, its file <game folder>/prompts/keytex.bin)
 void prompt_tex_announce(int value);              // (vk_menu.cpp menu_option_set, HOS_PROMPTS_TEX_ID)
 void prompt_tex_keys(int id, int value);          // (ReLink-R 0.0.14: HOS_PROMPTS_KEYS_ID, HOS_PROMPTS_KEYS_Y_ID)
+void prompt_tex_device(int value);                // (ReLink-R 0.0.14: HOS_PROMPTS_DEVICE_ID)
+int prompt_tex_gen();                             // (ReLink-R 0.0.14: vk_texture.cpp, a letter chosen at another generation)
 int prompt_tex_apply(uint8_t* blocks);            // (vk_texture.cpp upload, a texture of the shape: prompt_tex_shape)
 int prompt_tex_state();                           // (vk_texture.cpp texture_touch: a letter uploaded before it was known)
 bool prompt_tex_recognised(const uint8_t* blocks);   // (vk_xfer.cpp copy_b2t)

@@ -49,6 +49,8 @@ ocarina_tex::Replacer& ocarina() {
 }  // namespace
 
 void prompt_tex_keys(int id, int value) { replacer().keys(id, value); }   // (ReLink-R 0.0.14)
+void prompt_tex_device(int value) { replacer().device(value); }
+int prompt_tex_gen() { return replacer().gen(); }
 void prompt_tex_announce(int value) {
     replacer().announce(value);
     ocarina().announce(value);

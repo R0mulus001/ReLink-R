@@ -943,7 +943,7 @@ def write_cmap4(m, slots):
     return head + body, at
 
 
-def rebuild_cmap(cmap, slot_glyphs):
+def rebuild_cmap(cmap, slot_glyphs, extra=None):
     """the cmap with its format 4 subtables rebuilt so that each code point of slot_glyphs has its own glyph id slot,
     holding the glyph given; other subtables kept as they are. Returns it, every code point's glyph as the font had them,
     and the cmap offsets of the slots"""
@@ -962,6 +962,7 @@ def rebuild_cmap(cmap, slot_glyphs):
             if missing:
                 raise Unfit(f"U+{missing[0]:04X} is not in External's cmap")
             m.update(slot_glyphs)
+            m.update(extra or {})   # (ReLink-R 0.0.14: code points the font did not have, nx2/keyboard_prompts.py's keys)
             sub, at = write_cmap4(m, set(slot_glyphs))
             out += b"\0" * (-len(out) % 2)
             slots = {c: len(out) + a for c, a in at.items()}

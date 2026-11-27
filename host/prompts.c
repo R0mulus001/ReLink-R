@@ -249,7 +249,11 @@ static uint64_t fnv1a64(const unsigned char *b, unsigned long n) {
 
 int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N], const char *out_path, char *note,
                  size_t cap) {
-    const int keyboard = !strcmp(family, "keyboard");   /* (ReLink-R 0.0.14: binding[] holds virtual-key codes, 0 none) */
+    /* (ReLink-R 0.0.14: binding[] holds virtual-key codes, 0 none; "keyboard-live": Auto's, the slots on the game's own glyphs,
+       the texts' codes rewritten for the device in use while the game runs: hos_prompts_text_*) */
+    const int live = !strcmp(family, "keyboard-live");
+    const int keyboard = live || !strcmp(family, "keyboard");
+    if (live) family = "keyboard";
     if (strcmp(family, "xbox") && strcmp(family, "playstation") && !keyboard)
         return why(note, cap, "no button font for the family %s", family);
     char path[1024];
@@ -286,7 +290,7 @@ int prompts_make(const char *dir, const char *family, const int binding[HOS_SW_N
         size_t at = 0;
         shows[0] = 0;
         for (int i = 0; i < PR_BUTTONS; i++) {
-            const int vk = binding[buttons[i].sw];
+            const int vk = live ? 0 : binding[buttons[i].sw];
             const unsigned long g = vk > 0 && vk < 256 && s->keyg[vk] ? s->keyg[vk] : s->own[i];
             font[s->slot[i]] = (unsigned char)(g >> 8), font[s->slot[i] + 1] = (unsigned char)g;
             if (at < sizeof shows)
@@ -422,8 +426,13 @@ static volatile LONG keys_abx = 0, keys_y = 0;   /* (ReLink-R 0.0.14: the keyboa
 
 /* The renderer told what the font was given (the family, 0 when the game's own font stays, and Switch A, B, X and Y's
    inputs); rx_backend.c rx_start calls it again once the renderer is there, for a font opened before that */
+static volatile LONG live_on;        /* (ReLink-R 0.0.14, Auto's: defined with the texts' rewrite below) */
+static int live_start_keys;
+int hos_input_device(void);
 void hos_prompts_announce(void) {
     const LONG v = InterlockedCompareExchange(&tex_value, -1, -1);
+    if (v >= 0 && InterlockedCompareExchange(&live_on, 0, 0))   /* (ReLink-R 0.0.14, Auto: the device before the family) */
+        rx_option_set(HOS_PROMPTS_DEVICE_ID, hos_input_device() ? hos_input_device() : (live_start_keys ? 1 : 2));
     if (v >= 0 && (v & 3) == FAM_KEYBOARD) {   /* (ReLink-R 0.0.14: the keys before the family, which latches them) */
         rx_option_set(HOS_PROMPTS_KEYS_ID, (int)InterlockedCompareExchange(&keys_abx, 0, 0));
         rx_option_set(HOS_PROMPTS_KEYS_Y_ID, (int)InterlockedCompareExchange(&keys_y, 0, 0));
@@ -440,6 +449,83 @@ static char cache[MAX_PATH];         /* (the font made, empty: the game's own) *
 static char table_rel[200];          /* (System/Resource/<the table keyboard.txt names>) */
 static char table_path[MAX_PATH];    /* (prompts/rsizetable.zs, served for table_rel; empty: the game's own table) */
 
+/* ---- (ReLink-R 0.0.14) Auto's prompts while the game runs ------------------------------------------------------------------
+   After Hookshot 786b5b03 (#2366) and Longshot's host/prompts.c (text_rewrite), GPL-3.0. The game keeps each character code's
+   glyph once drawn, whatever the font says later, so a change shows only through other codes: the keyboard's font has each
+   key's own code point (KEY_BASE + its virtual-key code, nx2/keyboard_prompts.py), and a text's Switch button codes
+   (U+E040...) are rewritten to the code of the key bound to that button while the keyboard is the device in use, and back when
+   a controller is, as the game lays the text box out or draws it (the hook sites in nx2/oot_patches.py; the box: its text's
+   UTF-8 at +0xf0, its length in bytes at +0x124, its status at +8: 0x20000 lay out again, 0x100000 draw again, as the word
+   after it allows). A text that stays on screen keeps its icons until the game lays it out or draws it again. */
+#define KEY_BASE 0xF7C0u
+static volatile LONG live_on;        /* (Auto's font served: the hooks rewrite) */
+static int live_start_keys;          /* (the device at the start, until something is pressed: 1 the keyboard) */
+int hos_input_device(void);          /* nn_hid.c: 1 keyboard, 2 controller, 0 nothing pressed yet */
+
+static int live_keys_now(void) {
+    const int d = hos_input_device();
+    return d ? d == 1 : live_start_keys;
+}
+/* the code a Switch button code or a key's code is to be now; c itself when it stays */
+static unsigned live_code(unsigned c, int keys) {
+    if (keys) {
+        for (int i = 0; i < PR_BUTTONS; i++)
+            if (buttons[i].cp == c) {
+                int vk = hos_binding(HOS_BIND_KEY, buttons[i].sw, 0);
+                if (!vk) vk = hos_binding(HOS_BIND_KEY, buttons[i].sw, 1);
+                return vk > 0 && vk < 256 ? KEY_BASE + (unsigned)vk : c;
+            }
+        return c;
+    }
+    if (c < KEY_BASE || c >= KEY_BASE + 256) return c;
+    const int vk = (int)(c - KEY_BASE);
+    for (int i = 0; i < PR_BUTTONS; i++)   /* (the Switch button that key is bound to: a key is bound to one button at most) */
+        if (hos_binding(HOS_BIND_KEY, buttons[i].sw, 0) == vk || hos_binding(HOS_BIND_KEY, buttons[i].sw, 1) == vk)
+            return buttons[i].cp;
+    return c;
+}
+/* the box's codes for the device in use; 1 when it changed them */
+static int text_rewrite(uint64_t box) {
+    if (!InterlockedCompareExchange(&live_on, 0, 0) || !box) return 0;
+    const int keys = live_keys_now();
+    static volatile LONG logged_keys = -1;   /* (each change of the device, once: which way the texts go now) */
+    if (InterlockedExchange(&logged_keys, keys) != keys) hos_log("prompts: Auto: the texts' prompts now for %s", keys ? "the keyboard" : "a controller");
+    const uint64_t text = *(const uint64_t *)GP(box + 0xf0);
+    const uint32_t len = *(const uint32_t *)GP(box + 0x124);
+    if (!text || len < 3 || len > 65536) return 0;
+    uint8_t *s = (uint8_t *)GP(text);
+    int changed = 0;
+    for (uint32_t i = 0; i + 2 < len; i++) {   /* (UTF-8: these codes are 3 bytes, 1110xxxx 10xxxxxx 10xxxxxx) */
+        if ((s[i] != 0xEE && s[i] != 0xEF) || (s[i + 1] & 0xC0) != 0x80 || (s[i + 2] & 0xC0) != 0x80) continue;
+        const unsigned code = (unsigned)(s[i] & 0x0F) << 12 | (unsigned)(s[i + 1] & 0x3F) << 6 | (s[i + 2] & 0x3F);
+        const unsigned c = live_code(code, keys);
+        if (c != code) {
+            s[i] = (uint8_t)(0xE0 | c >> 12), s[i + 1] = (uint8_t)(0x80 | (c >> 6 & 0x3F)), s[i + 2] = (uint8_t)(0x80 | (c & 0x3F));
+            changed = 1;
+        }
+        i += 2;
+    }
+    return changed;
+}
+static void mark_box(uint64_t box, uint32_t bits) {   /* (the box's status bits set, as the word after them allows) */
+    const uint64_t status = *(const uint64_t *)GP(box + 8);
+    if (!status) return;
+    uint32_t *word = (uint32_t *)GP(status);
+    word[0] |= bits & word[1];
+}
+/* nn_hid.c: the device in use changed (1 the keyboard, 2 a controller): Auto's HUD cross follows it (the texts follow as the game
+   shows them, text_rewrite) */
+void hos_prompts_device(int d) {
+    if (InterlockedCompareExchange(&live_on, 0, 0)) rx_option_set(HOS_PROMPTS_DEVICE_ID, d);
+}
+/* the site text boxes' layout (f_8152aec0) and draw (f_8152b670), nx2/oot_patches.py */
+void hos_prompts_text_layout(uint64_t box) {
+    if (text_rewrite(box)) mark_box(box, 0x20000);
+}
+void hos_prompts_text_draw(uint64_t box) {
+    if (text_rewrite(box)) mark_box(box, 0x20000 | 0x100000);
+}
+
 static void decide(void) {
     char game[MAX_PATH], mod[MAX_PATH];
     const DWORD n = hos_game_path_a(game, MAX_PATH);
@@ -449,12 +535,17 @@ static void decide(void) {
     if (slash) *slash = 0;
     const char *from = "";
     int fam = slash ? chosen_family(game, sep, &from) : 0;
+    int live = 0;
     if (fam == FAM_AUTO) {   /* (SDL's controller thread may not have opened a pad yet: up to 1.5 s for one) */
         int present = 0;
         for (int k = 0; k < 30 && !(present = hos_pad_present()); k++) Sleep(50);
-        fam = present ? 0 : FAM_KEYBOARD;
-        hos_log("prompts: Auto: %s", present ? "a controller is connected: the game's own button font"
-                                             : "no controller connected: the keyboard's keys");
+        /* (ReLink-R 0.0.14) Auto follows the device in use while the game runs: the keyboard's font is served with the Switch's
+           own glyphs in its slots, and the texts' codes are rewritten to the keys' or back as the device changes (hos_prompts_text_*);
+           until something is pressed, the device is the one found now */
+        live_start_keys = !present;
+        live = 1;
+        fam = FAM_KEYBOARD;
+        hos_log("prompts: Auto: the prompts follow the device in use (now %s)", present ? "a controller" : "the keyboard");
     }
     const int keyboard = fam == FAM_KEYBOARD;
     int pad[HOS_SW_N], binding[HOS_SW_N];
@@ -498,8 +589,10 @@ static void decide(void) {
             snprintf(path, sizeof path, "%s%ccache", dir, sep);
             CreateDirectoryA(path, NULL);
             snprintf(path, sizeof path, "%s%ccache%cExternal.%s.bfotf.zs", dir, sep, sep, family_names[fam]);
-            if (prompts_make(dir, family_names[fam], binding, path, note, sizeof note)) {
+            if (live) snprintf(path, sizeof path, "%s%ccache%cExternal.keyboard-live.bfotf.zs", dir, sep, sep);
+            if (prompts_make(dir, live ? "keyboard-live" : family_names[fam], binding, path, note, sizeof note)) {
                 snprintf(cache, sizeof cache, "%s", path);
+                if (live) InterlockedExchange(&live_on, 1);
                 hos_log("prompts: %s %s (%s): %s; the game reads %s%s%s", family_names[fam], keyboard ? "keys" : "labels",
                         from, note, path, table_path[0] ? ", and its size table " : "", table_path);
             } else {

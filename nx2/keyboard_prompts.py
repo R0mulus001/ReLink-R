@@ -92,7 +92,12 @@ def build(orig):
     new_cff, _, _ = bg.rebuild_cff(cff, keep, extra)
 
     slot_glyphs = {cp: key_glyph[DEFAULT_KEY[name]] for name, cp, _ in bg.SWITCH}
-    new_cmap, _, slots = bg.rebuild_cmap(t["cmap"], slot_glyphs)
+    # (each key's own code point, KEY_BASE + its virtual-key code: Auto's texts are rewritten to them while the keyboard is
+    # in use, host/prompts.c text_rewrite; codes the game's glyph cache has never seen with another icon)
+    keys = {kk.KEY_BASE + vk: key_glyph[vk] for vk in range(256)}
+    new_cmap, before, slots = bg.rebuild_cmap(t["cmap"], slot_glyphs, extra=keys)
+    if any(c in before for c in keys):
+        raise bg.Unfit("External already maps a code point of KEY_BASE's range")
 
     all_metrics = metrics[:keep] + ext_metrics
     n = len(all_metrics)

@@ -2167,8 +2167,11 @@ bool upload(Texture& tex, const Ranges* dirty) {
                     st_unswizzle_ns +=
                         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - u0).count();
                 }
-                if (keytex && y0 == 0 && th == g.th && block_bytes == prompt_tex::kBlocks)
-                    tex.keytex_wait = prompt_tex_apply(blocks) < 0;
+                if (keytex && y0 == 0 && th == g.th && block_bytes == prompt_tex::kBlocks) {
+                    const int r = prompt_tex_apply(blocks);
+                    tex.keytex_wait = r < 0;
+                    if (r > 0) tex.keytex_gen = prompt_tex_gen();   // (ReLink-R 0.0.14: Auto's device change uploads it again)
+                }
                 if (ocarina && y0 == 0 && th == g.th && block_bytes == ocarina_tex::kBlocks)
                     tex.keytex_wait = ocarina_tex_apply(blocks) < 0;
                 if (tex.astc && tex.bc) {   // (igpu-fix: decoded, then encoded as BC3 into the staging)
@@ -3476,6 +3479,12 @@ Texture* texture_touch(Texture* tex, bool for_sampling) {
                      tex->width, tex->height, tex->layers, tex->nvn_format, (unsigned long long)(bytes >> 10));
         }
         tex->upload_gen = gen;
+        return tex;
+    }
+    if (tex->keytex_gen >= 0 && tex->keytex_gen != prompt_tex_gen() && !tex->gpu_written) {   // (ReLink-R 0.0.14: Auto's
+        tex->checked_epoch = epoch;                                                                  // device changed)
+        const uint32_t gen = memory_generation();
+        if (upload(*tex, nullptr)) tex->upload_value = rec_value, tex->upload_seg = tl_seg, tex->upload_gen = gen;
         return tex;
     }
     if (tex->keytex_wait && !tex->gpu_written) {   // (relink: a HUD cross letter or an ocarina note uploaded before its
